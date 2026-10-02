@@ -1,0 +1,29 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {"title": "Laserworld Cube Laser", "description": "Choose the laser to set up.", "data": {"address": "Device"}},
+      "confirm": {"description": "Set up {name}? Make sure the laser has been connected once with the official Cube Laser Control app."}
+    },
+    "abort": {"no_devices_found": "No Cube lasers found nearby (name starts with BLEAPP_).", "already_configured": "This laser is already configured."}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Connection options",
+        "data": {"idle_timeout": "Disconnect after idle seconds (0 = stay connected)", "user_id": "Cube Laser Control account user ID (only if the laser is bound)"},
+        "data_description": {"idle_timeout": "A laser accepts one Bluetooth connection at a time. Disconnecting when idle lets your phone app connect.", "user_id": "Leave 0 unless the laser is bound to your account in the official app."}
+      }
+    }
+  },
+  "entity": {
+    "switch": {"laser_output": {"name": "Laser output"}},
+    "select": {"run_mode": {"name": "Run mode"}, "work_mode": {"name": "APP work mode"}, "color_mode": {"name": "Color mode"}},
+    "number": {
+      "auto_speed": {"name": "Auto speed"}, "voice_sensitivity": {"name": "Voice sensitivity"},
+      "size_x": {"name": "Size X"}, "size_y": {"name": "Size Y"},
+      "position_x": {"name": "Position X"}, "position_y": {"name": "Position Y"}, "rotation": {"name": "Rotation"}
+    },
+    "button": {"read_settings": {"name": "Read settings"}, "disconnect": {"name": "Disconnect Bluetooth"}}
+  }
+}
