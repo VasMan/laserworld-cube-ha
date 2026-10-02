@@ -35,6 +35,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     async_add_entities([
         *(CubeNumber(link, entry, d) for d in NUMBERS),
         CubePatternNumber(link, entry),
+        CubeTextSize(link, entry),
         CubeLoopInterval(link, entry),
         CubeFlowNumber(link, entry, "color_flow", "mdi:water",
                        lambda l: l.flow_precision, lambda l, v: l.async_set_flow(precision=v)),
@@ -128,3 +129,24 @@ class CubeFlowNumber(CubeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.call(self._set(self.link, int(value)))
+
+
+class CubeTextSize(CubeEntity, NumberEntity):
+    """Size of the displayed text relative to the laser's full frame."""
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_step = 5
+    _attr_native_min_value = 10
+    _attr_native_max_value = 100
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_translation_key = "text_size"
+    _attr_icon = "mdi:format-size"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "text_size")
+
+    @property
+    def native_value(self) -> float:
+        return self.link.text_size
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self.link.async_set_text_size(value))

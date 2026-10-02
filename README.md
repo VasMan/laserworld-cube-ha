@@ -8,7 +8,7 @@ Local Bluetooth control of Laserworld **Cube** lasers (the ones controlled by th
 > rules, etc.). The laser switch is *never* restored to "on" after a restart.
 
 ## Install (HACS)
-1. Put this repo on GitHub and replace `YOUR_GITHUB_USER` in `custom_components/laserworld_cube/manifest.json`.
+1. Put this repo on GitHub as `VasMan/laserworld-cube-ha`.
 2. HACS → ⋮ → *Custom repositories* → add the repo URL, category **Integration** → install → restart HA.
 3. Make sure Home Assistant has a Bluetooth adapter or an ESPHome Bluetooth proxy in range of the laser.
 4. The laser should be auto-discovered (*Settings → Devices & services*), or *Add integration → Laserworld Cube Laser*.
@@ -37,6 +37,48 @@ Timetunnel / Northlight / Animation / Outdoors / Hotspot libraries in the offici
 Playing a pattern switches the laser to APP mode and respects the Laser output switch: if HA shows
 the laser as off, the pattern is sent but the laser stays off.
 
+## Pattern thumbnails
+The laser itself stores the shapes of its built-in patterns, so the integration can read them back
+and draw thumbnails like the official app's library page.
+
+1. Select a **Pattern library** and press **Build thumbnails** (diagnostic section). This reads every
+   pattern of that library from the laser in the background – roughly a minute for a few dozen
+   patterns, longer for big libraries like *Hotspot (128)*. Watch **Thumbnail status**.
+2. **Library overview** (image) shows a numbered grid of 20 patterns around the current one, with the
+   current pattern highlighted in blue, just like the app. It pages along as you step through patterns.
+3. **Pattern preview** (image) shows the current pattern large.
+
+Thumbnails are cached, so each library is only read once (use **Rebuild thumbnails** if you change the
+laser's content). While a build runs the integration keeps the Bluetooth link open, so close the phone app.
+
+Example dashboard card (your entity IDs may differ):
+
+```yaml
+type: vertical-stack
+cards:
+  - type: picture-entity
+    entity: image.laserworld_cube_847e_library_overview
+    show_name: false
+    show_state: false
+  - type: entities
+    entities:
+      - select.laserworld_cube_847e_pattern_library
+      - number.laserworld_cube_847e_pattern_number
+      - entity: button.laserworld_cube_847e_previous_pattern
+      - entity: button.laserworld_cube_847e_next_pattern
+```
+
+## Showing text
+Type into the **Text** entity (or call `text.set_value`) and the laser displays it immediately, like
+the app's *Text* page. Change **Text color** (single colors or *Rainbow* = one color per letter) and
+**Text size**; if text is showing it updates right away. **Clear text** removes it, **Play text**
+re-sends it. Multi-line text works too (`\n`, e.g. from a template).
+
+Notes: the text uses a simple built-in single-line font (A–Z, a–z, digits and common punctuation;
+accents are dropped). Text fills the laser's full width at 100 % – reduce **Text size** (or the laser's
+own *Size* controls) for short words. Scrolling/animated text is not supported yet. Text needs the
+laser's point data format 3 or 4 (the normal one); an error message tells you if yours differs.
+
 ## Entities
 | Entity | Notes |
 |---|---|
@@ -45,6 +87,9 @@ the laser as off, the pattern is sent but the laser stays off.
 | Pattern number (number) | Setting it plays that pattern |
 | Play / Pause / Stop / Previous / Next (buttons) | Player controls |
 | Loop play (switch), Loop mode, Loop interval | Cycling is timed by Home Assistant, like the phone app does |
+| Pattern preview, Library overview (images) | Thumbnails read from the laser (see above) |
+| Build / Rebuild / Cancel thumbnails (buttons), Thumbnail status (sensor) | Diagnostic |
+| Text (text), Text color (select), Text size (number), Play text / Clear text (buttons) | Show text on the laser |
 | Pattern color (select) | Original colors, White … Purple, Flowing (+ optional *Color flow*, *Color flow speed*) |
 | Run mode (select) | APP mode / DMX512 mode / ILDA mode |
 | APP work mode (select) | Automatic / Voice |
@@ -56,11 +101,13 @@ the laser as off, the pattern is sent but the laser stays off.
 On connect, current size/position/speed settings and the pattern-library catalog are read from the
 laser. Laser on/off, run mode and play state cannot be read back, so they are assumed.
 
+Requires the *Pillow* image library (Home Assistant installs it automatically if missing).
+
 **Per-pattern durations** (the "03.3" shown in the app) come from the app's cloud resources and are
 not stored in the laser, so Loop play uses one fixed interval instead.
 
 ## Not (yet) supported
-Playlists / *Offline play*, text and drawing playback, *Program* (custom effects), DMX channel
+Playlists / *Offline play*, drawing and image playback, scrolling text, *Program* (custom effects), DMX channel
 console, device setup (invert, scan rate persistence), activation, binding management.
 
 ## Troubleshooting

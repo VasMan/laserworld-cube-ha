@@ -28,7 +28,9 @@ for m in ["homeassistant", "homeassistant.components", "homeassistant.components
           "homeassistant.config_entries", "homeassistant.const", "homeassistant.core",
           "homeassistant.exceptions", "homeassistant.helpers", "homeassistant.helpers.device_registry",
           "homeassistant.helpers.entity", "homeassistant.helpers.restore_state",
-          "bleak_retry_connector", "voluptuous"]:
+          "bleak_retry_connector", "voluptuous", "homeassistant.components.text",
+          "homeassistant.components.image", "homeassistant.components.sensor", "homeassistant.util",
+          "homeassistant.util.dt", "homeassistant.helpers.storage", "homeassistant.helpers.entity_registry"]:
     sys.modules[m] = _Stub(m)
 sys.modules["homeassistant"].components = sys.modules["homeassistant.components"]
 sys.modules["homeassistant.components"].bluetooth = sys.modules["homeassistant.components.bluetooth"]
@@ -36,10 +38,14 @@ sys.modules["homeassistant.helpers"].device_registry = sys.modules["homeassistan
 sys.modules["homeassistant.helpers.device_registry"].CONNECTION_BLUETOOTH = "bluetooth"
 
 
-sys.modules["homeassistant.const"].Platform = types.SimpleNamespace(SWITCH="switch", SELECT="select", NUMBER="number", BUTTON="button")
+sys.modules["homeassistant.const"].Platform = types.SimpleNamespace(SWITCH="switch", SELECT="select", NUMBER="number", BUTTON="button",
+                                                                      TEXT="text", IMAGE="image", SENSOR="sensor")
 sys.modules["homeassistant.const"].EntityCategory = types.SimpleNamespace(DIAGNOSTIC="diagnostic")
 sys.modules["homeassistant.const"].CONF_ADDRESS = "address"
 sys.modules["homeassistant.components.number"].NumberMode = types.SimpleNamespace(SLIDER="slider", BOX="box")
+sys.modules["homeassistant.components.text"].TextMode = types.SimpleNamespace(TEXT="text")
+sys.modules["homeassistant.util"].dt = sys.modules["homeassistant.util.dt"]
+sys.modules["homeassistant.util.dt"].utcnow = lambda: object()
 class HAError(Exception): pass
 sys.modules["homeassistant.exceptions"].HomeAssistantError = HAError
 
@@ -48,7 +54,7 @@ spec = importlib.util.spec_from_file_location("custom_components.laserworld_cube
                                               submodule_search_locations=[str(ROOT / "laserworld_cube")])
 top = importlib.util.module_from_spec(spec); sys.modules[spec.name] = top; spec.loader.exec_module(top)
 mods = {n: importlib.import_module(f"custom_components.laserworld_cube.{n}")
-        for n in ("config_flow", "switch", "select", "number", "button")}
+        for n in ("config_flow", "switch", "select", "number", "button", "text", "image", "sensor")}
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import test_client_sim as sim   # reuses the simulated device
@@ -130,3 +136,51 @@ def test_player_entities():
         await sw.async_turn_off(); assert not sw.is_on
         await link.disconnect()
     asyncio.run(go())
+
+
+def test_text_images_and_sensor_entities():
+    async def go():
+        dev = sim.FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        entry = _entry()
+        await link.async_connect()
+        # --- text
+        txt = mods["text"].CubeTextMessage(link, entry)
+        await txt.async_set_value("Hi there")
+        assert txt.native_value == "Hi there" and len(dev.realtime) == 1
+        sel = {d.key: mods["select"].CubeSelect(link, entry, d) for d in mods["select"].SELECTS}
+        await sel["text_color"].async_select_option("Rainbow")
+        assert sel["text_color"].current_option == "Rainbow" and len(dev.realtime) == 2
+        size = mods["number"].CubeTextSize(link, entry)
+        await size.async_set_native_value(60)
+        assert size.native_value == 60 and len(dev.realtime) == 3
+        # user errors surface as HomeAssistantError
+        try:
+            await txt.async_set_value("   ")
+            raise AssertionError("expected HAError")
+        except HAError:
+            pass
+        # --- thumbnails
+        async def _exec(fn):
+            return fn()
+        hass = types.SimpleNamespace(async_add_executor_job=_exec)
+        preview = mods["image"].CubePatternPreview(hass, link, entry)
+        overview = mods["image"].CubeLibraryOverview(hass, link, entry)
+        preview.hass = overview.hass = hass
+        before = (preview._signature(), overview._signature())
+        assert (await preview.async_image()).startswith(b"\x89PNG")           # placeholder works with no data
+        btn = mods["button"].CubePlayButton(link, entry, "build_thumbnails", "i",
+                                            lambda l: l.async_start_thumbnails(), diagnostic=True)
+        await btn.async_press()
+        await _wait_built(link)
+        assert (preview._signature(), overview._signature()) != before        # images refresh when data arrives
+        img = await overview.async_image()
+        assert img.startswith(b"\x89PNG") and len(img) > 5000
+        status = mods["sensor"].CubeThumbStatus(link, entry)
+        assert "done" in status.native_value and status.extra_state_attributes["cached_patterns"] == 8
+        await link.disconnect()
+    asyncio.run(go())
+
+
+async def _wait_built(link):
+    await sim._wait_thumbs(link)

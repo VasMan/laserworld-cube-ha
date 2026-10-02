@@ -15,6 +15,7 @@ Summary of the protocol
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -37,16 +38,21 @@ RSP_HANDSHAKE = 0x8B
 
 # functions / actions
 FUNC_MY_DEVICE = 1
+FUNC_REAL_TIME_PLAY = 2
 FUNC_PATTERN_LIBRARY = 3
 FUNC_DISCONNECT_DEVICE = 7
 ACT_DISCONNECT = 1
 ACT_DEVICE_SET_MODEL = 1
 ACT_ENABLE_LASER_OUTPUT = 5
 ACT_SEARCH_LIB_FILE = 10
+ACT_SEARCH_PATTERN_LIB_DATA = 17
+ACT_SEARCH_EFFECT_LIB_DATA = 18
 ACT_SEARCH_DEVICE_SET_MODEL = 11
 ACT_SET_RUN_PARAMETERS = 12
 ACT_GET_DEVICE_BIND_INFO = 25
 ACT_FRAME_PLAYING = 5  # under FUNC_PATTERN_LIBRARY: [page, file]
+ACT_PLAY_START = 2     # under FUNC_REAL_TIME_PLAY: stream frames (text, drawings)
+ACT_CLEAR_PLAY_DATA = 6  # under FUNC_REAL_TIME_PLAY
 
 # third byte of ENABLE_LASER_OUTPUT
 PLAY_STATE_PLAY = 0
@@ -75,6 +81,10 @@ PATTERN_COLORS = {
     0: "Original colors", 1: "White", 2: "Red", 3: "Yellow", 4: "Green",
     5: "Cyan", 6: "Blue", 7: "Purple", 8: "Flowing",
 }
+# text colours: palette index 1-7, or 8 = a different colour per letter
+TEXT_COLORS = {1: "White", 2: "Red", 3: "Yellow", 4: "Green", 5: "Cyan", 6: "Blue",
+               7: "Purple", 8: "Rainbow"}
+RAINBOW = (2, 3, 4, 5, 6, 7)
 # client-side play modes of the official app
 LOOP_MODES = {0: "Loop", 1: "Random", 2: "Sequence", 3: "Single"}
 
@@ -150,6 +160,56 @@ DEFAULT_RUN_PARAMS: dict[str, int] = {
     "runAddress": 1, "runChannelMode": 0, "runColorMode": 11, "runZoneX": 100,
     "runZoneY": 100, "frameRate": 60, "scannerRate": 30, "setColor": 11,
 }
+
+
+# The device colour table (index -> RGB) used by library patterns and real-time frames.
+PALETTE: tuple[tuple[int, int, int], ...] = (
+    (0, 0, 0), (255, 255, 255), (255, 0, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255),
+    (0, 0, 255), (255, 0, 255), (255, 128, 128), (255, 140, 128), (255, 151, 128), (255, 163, 128),
+    (255, 174, 128), (255, 186, 128), (255, 197, 128), (255, 209, 128), (255, 220, 128), (255, 232, 128),
+    (255, 243, 128), (255, 255, 128), (243, 255, 128), (232, 255, 128), (220, 255, 128), (209, 255, 128),
+    (197, 255, 128), (186, 255, 128), (174, 255, 128), (163, 255, 128), (151, 255, 128), (140, 255, 128),
+    (128, 255, 128), (128, 255, 140), (128, 255, 151), (128, 255, 163), (128, 255, 174), (128, 255, 186),
+    (128, 255, 197), (128, 255, 209), (128, 255, 220), (128, 255, 232), (128, 255, 243), (128, 255, 255),
+    (128, 243, 255), (128, 232, 255), (128, 220, 255), (128, 209, 255), (128, 197, 255), (128, 186, 255),
+    (128, 174, 255), (128, 163, 255), (128, 151, 255), (128, 140, 255), (128, 128, 255), (140, 128, 255),
+    (151, 128, 255), (163, 128, 255), (174, 128, 255), (186, 128, 255), (197, 128, 255), (209, 128, 255),
+    (220, 128, 255), (232, 128, 255), (243, 128, 255), (255, 128, 255), (255, 128, 243), (255, 128, 232),
+    (255, 128, 220), (255, 128, 209), (255, 128, 197), (255, 128, 186), (255, 128, 174), (255, 128, 163),
+    (255, 128, 151), (255, 128, 140), (255, 0, 0), (255, 23, 0), (255, 46, 0), (255, 70, 0),
+    (255, 93, 0), (255, 116, 0), (255, 139, 0), (255, 162, 0), (255, 185, 0), (255, 209, 0),
+    (255, 232, 0), (255, 255, 0), (232, 255, 0), (209, 255, 0), (185, 255, 0), (162, 255, 0),
+    (139, 255, 0), (116, 255, 0), (93, 255, 0), (70, 255, 0), (46, 255, 0), (23, 255, 0),
+    (0, 255, 0), (0, 255, 23), (0, 255, 46), (0, 255, 70), (0, 255, 93), (0, 255, 116),
+    (0, 255, 139), (0, 255, 162), (0, 255, 185), (0, 255, 209), (0, 255, 232), (0, 255, 255),
+    (0, 232, 255), (0, 209, 255), (0, 185, 255), (0, 162, 255), (0, 139, 255), (0, 116, 255),
+    (0, 93, 255), (0, 70, 255), (0, 46, 255), (0, 23, 255), (0, 0, 255), (23, 0, 255),
+    (46, 0, 255), (70, 0, 255), (93, 0, 255), (116, 0, 255), (139, 0, 255), (162, 0, 255),
+    (185, 0, 255), (209, 0, 255), (232, 0, 255), (255, 0, 255), (255, 0, 232), (255, 0, 209),
+    (255, 0, 185), (255, 0, 162), (255, 0, 139), (255, 0, 116), (255, 0, 93), (255, 0, 70),
+    (255, 0, 46), (255, 0, 23), (128, 0, 0), (128, 12, 0), (128, 23, 0), (128, 35, 0),
+    (128, 47, 0), (128, 58, 0), (128, 70, 0), (128, 81, 0), (128, 93, 0), (128, 105, 0),
+    (128, 116, 0), (128, 128, 0), (116, 128, 0), (105, 128, 0), (93, 128, 0), (81, 128, 0),
+    (70, 128, 0), (58, 128, 0), (47, 128, 0), (35, 128, 0), (23, 128, 0), (12, 128, 0),
+    (0, 128, 0), (0, 128, 12), (0, 128, 23), (0, 128, 35), (0, 128, 47), (0, 128, 58),
+    (0, 128, 70), (0, 128, 81), (0, 128, 93), (0, 128, 105), (0, 128, 116), (0, 128, 128),
+    (0, 116, 128), (0, 105, 128), (0, 93, 128), (0, 81, 128), (0, 70, 128), (0, 58, 128),
+    (0, 47, 128), (0, 35, 128), (0, 23, 128), (0, 12, 128), (0, 0, 128), (12, 0, 128),
+    (23, 0, 128), (35, 0, 128), (47, 0, 128), (58, 0, 128), (70, 0, 128), (81, 0, 128),
+    (93, 0, 128), (105, 0, 128), (116, 0, 128), (128, 0, 128), (128, 0, 116), (128, 0, 105),
+    (128, 0, 93), (128, 0, 81), (128, 0, 70), (128, 0, 58), (128, 0, 47), (128, 0, 35),
+    (128, 0, 23), (128, 0, 12), (255, 192, 192), (255, 64, 64), (192, 0, 0), (64, 0, 0),
+    (255, 255, 192), (255, 255, 64), (192, 192, 0), (64, 64, 0), (192, 255, 192), (64, 255, 64),
+    (0, 192, 0), (0, 64, 0), (192, 255, 255), (64, 255, 255), (0, 192, 192), (0, 64, 64),
+    (192, 192, 255), (64, 64, 255), (0, 0, 192), (0, 0, 64), (255, 192, 255), (255, 64, 255),
+    (192, 0, 192), (64, 0, 64), (255, 96, 96), (255, 255, 255), (245, 245, 245), (235, 235, 235),
+    (224, 224, 224), (213, 213, 213), (203, 203, 203), (192, 192, 192), (181, 181, 181), (171, 171, 171),
+    (160, 160, 160), (149, 149, 149), (139, 139, 139), (128, 128, 128), (117, 117, 117), (107, 107, 107),
+    (96, 96, 96), (85, 85, 85), (75, 75, 75), (64, 64, 64),
+)
+PALETTE_INDEX: dict[tuple[int, int, int], int] = {}
+for _i, _rgb in enumerate(PALETTE):
+    PALETTE_INDEX.setdefault(_rgb, _i)
 
 
 class ProtocolError(Exception):
@@ -246,12 +306,18 @@ def build_simple(function: int, action: int) -> bytes:
 
 
 def build_transfer(function: int, action: int, data: bytes | None = None, *,
-                   data_format: int = 1, timestamp: str | None = None) -> bytes:
-    """First (and, for small payloads, only) data-transfer packet."""
+                   data_format: int = 1, timestamp: str | None = None,
+                   total_len: int | None = None, layers: int = 0, frame: int = 0) -> bytes:
+    """First (and, for small payloads, only) data-transfer packet.
+
+    ``total_len`` is the length of the *whole* transfer when ``data`` is only the
+    first chunk; ``layers``/``frame`` are the two header bytes the app uses for
+    real-time frame streaming.
+    """
     ts = ("A" + (timestamp or timestamp_now())).encode("ascii")[:30].ljust(30, b"\x00")
     payload = bytes([function, action, 0, data_format])
-    payload += _be(len(data) if data else 0, 4)
-    payload += bytes([0, 0]) + ts + _be(0, 2)
+    payload += _be(total_len if total_len is not None else (len(data) if data else 0), 4)
+    payload += bytes([layers, frame]) + ts + _be(0, 2)
     if data:
         payload += data
     return _frame(CMD_TRANSFER, payload)
@@ -424,6 +490,7 @@ class Library:
     effect_group: bool
     name: str
     pages: list[tuple[int, int]] = field(default_factory=list)  # (page, count)
+    effect_pages: set[int] = field(default_factory=set)  # pages that hold multi-step effects
     label: str = ""
 
     @property
@@ -466,6 +533,8 @@ def build_libraries(entries: list[LibEntry]) -> list[Library]:
         if lib is None:
             lib = groups[key] = Library(e.files_number, e.files_merge, effect_group, name)
         lib.pages.append((e.page, e.count))
+        if e.is_effect:
+            lib.effect_pages.add(e.page)
     libs = sorted(groups.values(), key=lambda l: min(pg for pg, _ in l.pages))
     base_counts: dict[str, int] = {}
     for lib in libs:
@@ -477,3 +546,166 @@ def build_libraries(entries: list[LibEntry]) -> list[Library]:
             suffix = " [effects]" if lib.effect_group else " [patterns]"
         lib.label = f"{lib.name}{suffix} ({lib.size})"
     return libs
+
+
+# ----------------------------------------------------- multi-packet transfers
+
+def build_continuation(chunk: bytes) -> bytes:
+    """Follow-up packet of a transfer that did not fit in one packet."""
+    return _frame(CMD_TRANSFER_CONT, chunk)
+
+
+def split_transfer(function: int, action: int, data: bytes, buffer_max: int, *,
+                   data_format: int, layers: int = 0, frame: int = 0,
+                   timestamp: str | None = None) -> list[bytes]:
+    """Split ``data`` into packets like the app: the first carries ``buffer_max-47``
+    bytes of data, every following one ``buffer_max-5``."""
+    if buffer_max < 64:
+        raise ProtocolError(f"implausible packet size {buffer_max}")
+    first, rest = buffer_max - 47, buffer_max - 5
+    packets = [build_transfer(function, action, data[:first], data_format=data_format,
+                              timestamp=timestamp, total_len=len(data), layers=layers,
+                              frame=frame)]
+    pos = first
+    while pos < len(data):
+        packets.append(build_continuation(data[pos:pos + rest]))
+        pos += rest
+    return packets
+
+
+# ------------------------------------------------------ real-time point frames
+
+# A frame is a list of paths; a path is a list of (x, y, (r, g, b)).
+RGB = tuple[int, int, int]
+Path = list[tuple[float, float, RGB]]
+
+
+def _js_round(x: float) -> int:
+    return math.floor(x + 0.5)
+
+
+def _corner_angle(v: tuple, a: tuple, n: tuple) -> float:
+    """Angle at ``v`` between the directions to ``a`` and ``n`` (degrees)."""
+    ax, ay = a[0] - v[0], a[1] - v[1]
+    bx, by = n[0] - v[0], n[1] - v[1]
+    denom = math.sqrt(ax * ax + ay * ay) * math.sqrt(bx * bx + by * by)
+    if denom == 0:
+        return math.nan
+    c = max(-1.0, min(1.0, (ax * bx + ay * by) / denom))
+    return math.acos(c) * (180 / math.pi)
+
+
+def normalize_frame(paths: list[Path], width: float, height: float) -> list[Path]:
+    """Scale local coordinates to the 0..65535 square, aspect-preserving and
+    centred (what the app does for every layer before sending)."""
+    t = 65535 / max(width, height)
+    ox = (65535 - t * width) / 2
+    oy = (65535 - t * height) / 2
+    out: list[Path] = []
+    for path in paths:
+        pts = [(math.floor(x * t + ox), math.floor(y * t + oy), rgb) for x, y, rgb in path]
+        pts = [pt for pt in pts if 0 <= pt[0] <= 65535 and 0 <= pt[1] <= 65535]
+        if pts:
+            out.append(pts)
+    return out
+
+
+def encode_frames(frames: list[list[Path]], data_format: int) -> bytes:
+    """Encode frames of normalized points (formats 3 and 4 only).
+
+    Layout: for each frame a 2-byte point count, then all points. A point is
+    ``x(2) y(2) flags(1) colour`` where colour is a palette index (format 3) or
+    r,g,b (format 4); ``flags`` = corner angle (6 bits) | 64 path start | 128 end.
+    """
+    if data_format not in (3, 4):
+        raise ProtocolError(f"point data format {data_format} is not supported")
+    counts = bytearray()
+    body = bytearray()
+    prev = None
+    last_frame = len(frames) - 1
+    for s, frame in enumerate(frames):
+        counts += _be(sum(len(path) for path in frame), 2)
+        for c, path in enumerate(frame):
+            closed = bool(path) and path[0][:2] == path[-1][:2]
+            start, end = 64, 0
+            for m, v in enumerate(path):
+                if len(path) > 1 and m == len(path) - 1 and c == len(frame) - 1 and s == last_frame:
+                    start, end = 0, 128
+                if prev is None:
+                    prev = (path[-2] if len(path) >= 2 else None) if closed else path[-1]
+                if m + 1 == len(path):
+                    nxt = (path[1] if len(path) >= 2 else None) if closed else path[0]
+                else:
+                    nxt = path[m + 1]
+                angle = _corner_angle(v, prev, nxt) if prev and nxt else 180
+                bits = 0
+                if not math.isnan(angle):
+                    bits = math.floor(_js_round(angle) / 180 * 63)
+                flags = bits | start | end
+                x, y, rgb = _js_round(v[0]), _js_round(v[1]), v[2]
+                body += _be(x, 2) + _be(y, 2) + bytes([flags])
+                if data_format == 3:
+                    body += bytes([max(PALETTE_INDEX.get(rgb, 0), 0)])
+                else:
+                    body += bytes(rgb)
+                prev = v
+                start = end = 0
+    return bytes(counts + body)
+
+
+def max_points(scene_max: int, data_format: int) -> int:
+    """How many points the device accepts in one real-time play (from the app)."""
+    return (512 * scene_max - 128) // (6 if data_format == 3 else 1)
+
+
+# ------------------------------------------------- reading patterns back (thumbnails)
+
+PATTERN_HEADER_FIELDS: tuple[tuple[str, int], ...] = (
+    ("patternLibIndex", 1), ("patternTotal", 1), ("patternIndex", 1), ("frameTotal", 2),
+    ("frameIndex", 2), ("pointFormat", 1), ("pointTotal", 2), ("pointOffset", 2),
+)
+
+
+def build_pattern_read(page: int, file: int, frame: int = 1, offset: int = 1) -> bytes:
+    """Payload of SEARCH_PATTERN_LIB_DATA."""
+    return bytes([page, 0, file]) + _be(0, 2) + _be(frame, 2) + bytes([0]) + _be(0, 2) + _be(offset, 2)
+
+
+def build_effect_read(page: int, step: int) -> bytes:
+    """Payload of SEARCH_EFFECT_LIB_DATA."""
+    return bytes([page, 0, step])
+
+
+# a decoded device point: (x 0..254, y 0..254, state flags, 0xRRGGBB)
+DevicePoint = tuple[int, int, int, int]
+
+
+def parse_pattern_chunk(message: bytes) -> tuple[dict[str, int], list[DevicePoint]]:
+    """Parse one SEARCH_PATTERN_LIB_DATA reply."""
+    if len(message) < 19 or message[4] != 0xAA or message[5] != 0x55:
+        raise ProtocolError("bad pattern data reply")
+    header = parse_fields(message[7:19], PATTERN_HEADER_FIELDS)
+    fmt = header["pointFormat"]
+    if fmt not in (3, 5):
+        raise ProtocolError(f"unsupported stored point format {fmt}")
+    body = message[19:19 + max(0, message[6] - 15)]
+    points: list[DevicePoint] = []
+    for i in range(0, len(body) - fmt + 1, fmt):
+        b0, b1 = body[i], body[i + 1]
+        state = (128 if b0 & 128 else 0) | (64 if b1 & 128 else 0)
+        if fmt == 3:
+            idx = body[i + 2]
+            r, g, b = PALETTE[idx] if idx < len(PALETTE) else (255, 255, 255)
+        else:
+            r, g, b = body[i + 2], body[i + 3], body[i + 4]
+        points.append((2 * (b0 & 127), 2 * (b1 & 127), state, (r << 16) | (g << 8) | b))
+    return header, points
+
+
+def parse_effect_step(message: bytes) -> dict[str, int]:
+    """Parse the first record of a SEARCH_EFFECT_LIB_DATA reply."""
+    if len(message) < 15 or message[4] != 0xAA or message[5] != 0x55:
+        raise ProtocolError("bad effect data reply")
+    return {"page": message[7], "step_total": message[8], "step_start": message[9],
+            "channels": message[10], "play_ms": 50 * message[11], "sub_steps": message[12],
+            "pattern_lib": message[13], "pattern_index": message[14]}

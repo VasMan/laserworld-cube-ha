@@ -40,6 +40,8 @@ SELECTS = (
               lambda l, v: l.async_set_params(runColorMode=v), None, "mdi:palette"),
     SelectDef("pattern_color", p.PATTERN_COLORS, lambda l: _pattern_color(l),
               lambda l, v: l.async_set_pattern_color(v), None, "mdi:palette-swatch"),
+    SelectDef("text_color", p.TEXT_COLORS, lambda l: l.text_color,
+              lambda l, v: l.async_set_text_color(v), None, "mdi:format-color-text"),
     SelectDef("loop_mode", p.LOOP_MODES, lambda l: l.loop_mode,
               lambda l, v: l.async_set_loop_mode(v), None, "mdi:repeat"),
 )

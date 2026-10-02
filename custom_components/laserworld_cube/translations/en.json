@@ -60,6 +60,9 @@
       },
       "loop_mode": {
         "name": "Loop mode"
+      },
+      "text_color": {
+        "name": "Text color"
       }
     },
     "number": {
@@ -95,6 +98,9 @@
       },
       "color_speed": {
         "name": "Color flow speed"
+      },
+      "text_size": {
+        "name": "Text size"
       }
     },
     "button": {
@@ -118,6 +124,39 @@
       },
       "next": {
         "name": "Next pattern"
+      },
+      "play_text": {
+        "name": "Play text"
+      },
+      "clear_text": {
+        "name": "Clear text"
+      },
+      "build_thumbnails": {
+        "name": "Build thumbnails"
+      },
+      "rebuild_thumbnails": {
+        "name": "Rebuild thumbnails"
+      },
+      "cancel_thumbnails": {
+        "name": "Cancel thumbnail build"
+      }
+    },
+    "text": {
+      "message": {
+        "name": "Text"
+      }
+    },
+    "image": {
+      "pattern_preview": {
+        "name": "Pattern preview"
+      },
+      "library_overview": {
+        "name": "Library overview"
+      }
+    },
+    "sensor": {
+      "thumbnail_status": {
+        "name": "Thumbnail status"
       }
     }
   }

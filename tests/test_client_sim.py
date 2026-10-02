@@ -29,14 +29,41 @@ def s32(text):
     return text.encode().ljust(32, b"\x00")
 
 
+def sim_points(page, file):
+    """Deterministic device-format points for a pattern (more than one 80-point reply)."""
+    import math
+    n = 100 + file
+    pts = []
+    for i in range(n):
+        a = 2 * math.pi * i / n
+        rgb = (255, 0, 0) if (i // 7) % 2 == 0 else (0, 0, 0)
+        pts.append((int(127 + 100 * math.cos(a)) // 2 * 2, int(127 + 100 * math.sin(a)) // 2 * 2,
+                    64 if i == 0 else 0, (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]))
+    return pts
+
+
+def stored_chunk(page, file, offset, pts):
+    body = b""
+    for x, y, state, rgb in pts[offset - 1: offset - 1 + 80]:
+        idx = p.PALETTE_INDEX[((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255)]
+        body += bytes([(x // 2) | (128 if state & 128 else 0), (y // 2) | (128 if state & 64 else 0), idx])
+    hdr = bytes([page, 40, file]) + (1).to_bytes(2, "big") + (1).to_bytes(2, "big") + bytes([3]) \
+        + len(pts).to_bytes(2, "big") + offset.to_bytes(2, "big")
+    return bytes([0x85, 0x12, 0x34, 0, 0xAA, 0x55, 15 + len(body)]) + hdr + body
+
+
 class FakeDevice:
-    def __init__(self, activate=1, bind_en=255, bind_user=0, fw=(2, 1, 0), drop_first=False, model_len=None):
+    def __init__(self, activate=1, bind_en=255, bind_user=0, fw=(2, 1, 0), drop_first=False, model_len=None, fmt=3):
         self.activate, self.bind_en, self.bind_user, self.fw = activate, bind_en, bind_user, fw
         self.device_key, self.device_secret, self.product_key = "DEVKEY-0123456789abcdef", "SECRET-9876543210fedcba", "PROD-KEY-1"
         self.keys = p.default_key_iv(NAME)
         self.received = []          # (function, action, data)
         self.drop_next = drop_first
         self.model_len = model_len
+        self.fmt = fmt
+        self.stream = None           # reassembly of multi-packet transfers
+        self.realtime = []           # (layers, frame, data) from REAL_TIME_PLAY/PLAY_START
+        self.cleared = 0
         self.frames = []            # (page, file) received via PATTERN_LIBRARY/FRAME_PLAYING
         self.enables = []           # raw ENABLE_LASER_OUTPUT payloads
         # (page, delete, step_total, file_total, files_number, merge)
@@ -57,7 +84,7 @@ class FakeDevice:
         extras = (b"\0" * 12 + bytes([1, 0, 5]) + b"\0" + p.APP_COMPANY.encode().ljust(16, b"\0")
                   + bytes([1, 0, 1]) + b"\0" + bytes([1, 0, 0]) + b"\0\0\0\0" + b"\0")
         body = (bytes([0x8B, 0x12, 0x34, 0]) + (244).to_bytes(2, "big") + (36).to_bytes(2, "big")
-                + bytes([1, 2, 0]) + bytes(self.fw) + bytes([1, 8, self.activate])
+                + bytes([1, 2, 0]) + bytes(self.fw) + bytes([self.fmt, 8, self.activate])
                 + s32(self.device_key) + s32(self.device_secret) + s32(self.product_key)
                 + (7).to_bytes(4, "big") + (1).to_bytes(2, "big") + (2).to_bytes(2, "big") + b"\0" + bytes([44])
                 + extras)
@@ -65,6 +92,13 @@ class FakeDevice:
 
     def data_rsp(self, payload):
         return bytes([0x85, 0x12, 0x34, 0, 0xAA, 0x55, len(payload) & 0xFF]) + payload
+
+    def _finish_stream(self):
+        st = self.stream
+        if len(st["data"]) >= st["total"]:
+            if st["func"] == 2 and st["action"] == p.ACT_PLAY_START:
+                self.realtime.append((st["layers"], st["frame"], st["data"][:st["total"]]))
+            self.stream = None
 
     def handle(self, plain):
         cmd = plain[0]
@@ -76,11 +110,34 @@ class FakeDevice:
         if cmd == p.CMD_SIMPLE:
             self.received.append(("simple", plain[5], plain[6]))
             return p.encrypt(bytes([0x8A, 0x12, 0x34, 0]), *self.keys)
+        if cmd == p.CMD_TRANSFER_CONT:
+            n = int.from_bytes(plain[3:5], "big")
+            self.stream["data"] += plain[5:5 + n]
+            self._finish_stream()
+            return p.encrypt(bytes([0x85, 0x12, 0x34, 0]), *self.keys)
         assert cmd == p.CMD_TRANSFER, hex(cmd)
         func, action = plain[5], plain[6]
         dlen = int.from_bytes(plain[9:13], "big")
-        data = plain[47:47 + dlen]
+        layers, frame_b = plain[13], plain[14]
+        n = int.from_bytes(plain[3:5], "big")
+        data = plain[47:5 + n]
         self.received.append((func, action, data))
+        if dlen > len(data):                      # more packets follow
+            self.stream = {"func": func, "action": action, "total": dlen, "data": bytes(data),
+                           "layers": layers, "frame": frame_b}
+            return p.encrypt(bytes([0x85, 0x12, 0x34, 0]), *self.keys)
+        data = data[:dlen]
+        if func == 2 and action == p.ACT_PLAY_START:
+            self.realtime.append((layers, frame_b, bytes(data)))
+        if func == 2 and action == p.ACT_CLEAR_PLAY_DATA:
+            self.cleared += 1
+        if func == 1 and action == p.ACT_SEARCH_PATTERN_LIB_DATA:
+            off = int.from_bytes(data[10:12], "big")
+            return p.encrypt(stored_chunk(data[0], data[2], off, sim_points(data[0], data[2])), *self.keys)
+        if func == 1 and action == p.ACT_SEARCH_EFFECT_LIB_DATA:
+            page, step = data[0], data[2]
+            rsp = bytes([0x85, 0x12, 0x34, 0, 0xAA, 0x55, 18, page, 10, step, 6, 66, 1, 3, step, 0, 0, 0])
+            return p.encrypt(rsp, *self.keys)
         if func == 1 and action == p.ACT_SEARCH_LIB_FILE:
             page, delete, step, files, num, merge = self.catalog[data[0] - 1]
             entry = bytes([page]) + b"\x00\x00\x00\x2a" + bytes([delete]) + (1234).to_bytes(4, "big") \
@@ -335,4 +392,151 @@ def test_loop_modes():
         await link.async_set_laser(False)
         assert not link.loop_on
         await link.disconnect()
+    asyncio.run(go())
+
+
+async def _wait_thumbs(link, timeout=10):
+    for _ in range(int(timeout / 0.02)):
+        if not link._thumbs_running():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("thumbnail build did not finish")
+
+
+def test_thumbnails_read_all_points_across_replies():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0.05)          # idle timer must not interrupt a build
+        await link.async_connect()
+        await link.async_select_library(0)                 # Timetunnel (8), plain pattern pages
+        await link.async_start_thumbnails()
+        await _wait_thumbs(link)
+        assert sorted(link.thumbs) == [f"1_{i}" for i in range(1, 9)]
+        for file in range(1, 9):
+            flat = link.thumbs[f"1_{file}"]
+            want = sim_points(1, file)
+            assert len(flat) == 4 * len(want), (file, len(flat) // 4, len(want))   # overlap removed
+            assert [tuple(flat[i:i + 4]) for i in range(0, len(flat), 4)] == want
+        assert "done" in link.thumb_status
+        # existing thumbnails are kept unless rebuilding
+        n = len(dev.received)
+        await link.async_start_thumbnails(); await _wait_thumbs(link)
+        assert len(dev.received) == n
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_thumbnails_for_effect_pages_resolve_pattern():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_connect()
+        idx = [l.name for l in link.libraries].index("Mixture")
+        await link.async_start_thumbnails(idx)
+        await _wait_thumbs(link)
+        assert set(link.thumbs) == {f"7_{i}" for i in range(1, 11)}
+        # the sim maps effect step k -> pattern (3, k)
+        flat = link.thumbs["7_4"]
+        assert [tuple(flat[i:i + 4]) for i in range(0, len(flat), 4)] == sim_points(3, 4)
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_thumbnail_cancel_and_cache_hook():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        saved = []
+        def changed():
+            saved.append(len(link.thumbs))
+            if len(link.thumbs) >= 8:
+                link._cancel_thumbs()                      # cancel mid-build
+        link.on_thumbs_changed = changed
+        await link.async_connect()
+        await link.async_select_library(4)                 # Hotspot (128)
+        await link.async_start_thumbnails()
+        await asyncio.sleep(0.5)
+        assert not link._thumbs_running() and 8 <= len(link.thumbs) < 128 and saved
+        try:
+            await link.async_start_thumbnails(99)
+            raise AssertionError("expected error")
+        except c.CubeError:
+            pass
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def _decode_points(data):
+    count = int.from_bytes(data[:2], "big")
+    pts = []
+    for i in range(count):
+        o = 2 + i * 6
+        pts.append((int.from_bytes(data[o:o + 2], "big"), int.from_bytes(data[o + 2:o + 4], "big"), data[o + 4], data[o + 5]))
+    assert len(data) == 2 + count * 6
+    return pts
+
+
+def test_text_is_streamed_in_packets_and_decodes():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_laser(True)
+        await link.async_play_text("Hello World")
+        assert len(dev.realtime) == 1
+        layers, frame, data = dev.realtime[0]
+        assert layers == 1 and frame == 0
+        pts = _decode_points(data)
+        assert len(pts) > 50 and len(data) > 244 - 47          # more than one packet, reassembled intact
+        assert pts[0][2] & 64 and pts[-1][2] & 128           # first point starts a path, last ends the frame
+        xs = [x for x, _, _, _ in pts]; ys = [y for _, y, _, _ in pts]
+        assert min(xs) == 0 and max(xs) == 65535             # wide text fills the full width
+        assert 0 < min(ys) and max(ys) < 65535 and abs((min(ys) + max(ys)) / 2 - 32767) < 400   # centred vertically
+        assert dev.enables[-1] == bytes([1, 0, 0]) and link.text_active
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_text_color_size_and_rainbow():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_play_text("Hi")
+        white = _decode_points(dev.realtime[-1][2])
+        assert {c_ for *_, c_ in white} == {1}
+        await link.async_set_text_color(2)                   # replays because text is active
+        red = _decode_points(dev.realtime[-1][2])
+        assert {c_ for *_, c_ in red} == {2} and len(dev.realtime) == 2
+        await link.async_set_text_color(8)
+        assert {c_ for *_, c_ in _decode_points(dev.realtime[-1][2])} == {2, 3}   # one colour per letter
+        await link.async_set_text_size(50)
+        half = _decode_points(dev.realtime[-1][2])
+        xs = [x for x, *_ in half]
+        assert 16000 < min(xs) < 17000 and 48500 < max(xs) < 49500
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_text_errors_do_not_drop_the_link():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_connect()
+        for bad in ("", "   ", "x" * 400):
+            try:
+                await link.async_play_text(bad)
+                raise AssertionError("expected CubeUserError")
+            except c.CubeUserError:
+                assert link.connected and link.state["connects"] == 1
+        dev2 = FakeDevice(fmt=1)                              # unsupported point format
+        link2 = make_link(dev2, idle_timeout=0)
+        try:
+            await link2.async_play_text("Hi"); raise AssertionError("expected error")
+        except c.CubeUserError as err:
+            assert "format 1" in str(err)
+        await link.async_clear_text()
+        assert dev.cleared == 1 and not link.text_active
+        # playing a library pattern or stopping ends 'text active'
+        await link.async_play_text("Hi"); await link.async_select_library(0); await link.async_play_index(1)
+        assert not link.text_active
+        await link.disconnect(); await link2.disconnect()
     asyncio.run(go())

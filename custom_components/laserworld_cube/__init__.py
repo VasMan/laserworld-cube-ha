@@ -10,13 +10,15 @@ from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
 
 from .client import CubeError, CubeLink
 from .const import (DOMAIN, CONF_BLE_NAME, CONF_IDLE_TIMEOUT, CONF_USER_ID,
                     DEFAULT_IDLE_TIMEOUT, DEFAULT_USER_ID)
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.SWITCH, Platform.SELECT, Platform.NUMBER, Platform.BUTTON]
+PLATFORMS = [Platform.SWITCH, Platform.SELECT, Platform.NUMBER, Platform.BUTTON,
+             Platform.TEXT, Platform.IMAGE, Platform.SENSOR]
 
 CubeConfigEntry = ConfigEntry[CubeLink]
 
@@ -41,6 +43,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> bool
         user_id=int(entry.options.get(CONF_USER_ID, DEFAULT_USER_ID)),
         idle_timeout=float(entry.options.get(CONF_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT)))
     entry.runtime_data = link
+
+    # thumbnails read from the laser are cached so they are only read once
+    store = Store(hass, 1, f"{DOMAIN}.thumbs_{address.replace(':', '').lower()}")
+    link.store = store
+    cached = await store.async_load()
+    if isinstance(cached, dict):
+        link.thumbs.update({k: v for k, v in (cached.get("thumbs") or {}).items() if isinstance(v, list)})
+    link.on_thumbs_changed = lambda: store.async_delay_save(lambda: {"thumbs": link.thumbs}, 15)
 
     async def _initial_read() -> None:
         try:
@@ -80,5 +90,8 @@ async def _reload(hass: HomeAssistant, entry: CubeConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> bool:
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
-        await entry.runtime_data.disconnect()
+        link = entry.runtime_data
+        await link.disconnect()
+        if link.thumbs and link.store is not None:
+            await link.store.async_save({"thumbs": link.thumbs})
     return ok

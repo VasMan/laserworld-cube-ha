@@ -16,14 +16,24 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         CubePlayButton(link, entry, "stop", "mdi:stop", lambda l: l.async_stop()),
         CubePlayButton(link, entry, "previous", "mdi:skip-previous", lambda l: l.async_step(-1)),
         CubePlayButton(link, entry, "next", "mdi:skip-next", lambda l: l.async_step(1)),
+        CubePlayButton(link, entry, "play_text", "mdi:text-box-play", lambda l: l.async_play_text()),
+        CubePlayButton(link, entry, "clear_text", "mdi:text-box-remove", lambda l: l.async_clear_text()),
+        CubePlayButton(link, entry, "build_thumbnails", "mdi:image-plus",
+                       lambda l: l.async_start_thumbnails(), diagnostic=True),
+        CubePlayButton(link, entry, "rebuild_thumbnails", "mdi:image-sync",
+                       lambda l: l.async_start_thumbnails(rebuild=True), diagnostic=True),
+        CubePlayButton(link, entry, "cancel_thumbnails", "mdi:image-off",
+                       lambda l: l.async_cancel_thumbnails(), diagnostic=True),
     ])
 
 
 class CubePlayButton(CubeEntity, ButtonEntity):
     """Player controls for the selected pattern library."""
 
-    def __init__(self, link, entry, key: str, icon: str, action) -> None:
+    def __init__(self, link, entry, key: str, icon: str, action, diagnostic: bool = False) -> None:
         super().__init__(link, entry, key)
+        if diagnostic:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_translation_key = key
         self._attr_icon = icon
         self._action = action

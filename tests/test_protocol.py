@@ -64,3 +64,67 @@ def test_handshake_frames():
 def test_name_derivation_for_user_device():
     key, iv = p.default_key_iv("BLEAPP_847E")  # offset 0x4E
     assert key == bytes(p.KEY_TABLE[(0x4E + i) % 256] for i in range(16))
+
+
+# ----------------------------------------------------- text / thumbnail support
+V2 = json.loads((HERE / "vectors2.json").read_text())
+
+
+def _rgb(hexstr):
+    h = hexstr.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def test_palette_matches_app():
+    # indices that appear in the app's colour table must round-trip
+    assert p.PALETTE[1] == (255, 255, 255) and p.PALETTE[2] == (255, 0, 0)
+    assert len(p.PALETTE) == 250
+
+
+def test_normalize_and_encode_match_app():
+    for case in V2["encode"]:
+        frames = [[[(pt["x"], pt["y"], _rgb(pt["c"])) for pt in path] for path in frame]
+                  for frame in case["frames"]]
+        norm = [p.normalize_frame(frame, case["width"], case["height"]) for frame in frames]
+        # the app's own normalization (Yr) output must equal ours
+        app_norm = [[[(pt["x"], pt["y"], _rgb(pt["c"])) for pt in path] for path in frame] for frame in case["yr"]]
+        assert norm == app_norm
+        assert p.encode_frames(norm, case["fmt"]) == bytes(case["bytes"]), case["fmt"]
+
+
+def test_continuation_frames():
+    assert p.build_continuation(bytes([1, 2, 3, 4, 5])) == bytes(V2["si"][0])
+    assert p.build_continuation(bytes(range(230))) == bytes(V2["si"][1])
+
+
+def test_split_transfer_chunking():
+    data = bytes(range(256)) * 3                       # 768 bytes
+    pkts = p.split_transfer(2, 2, data, 244, data_format=3, layers=1, frame=0, timestamp="20261002170305")
+    first = p.build_transfer(2, 2, data[:197], data_format=3, timestamp="20261002170305",
+                             total_len=768, layers=1, frame=0)
+    assert pkts[0] == first
+    assert [len(x) - 5 for x in pkts[1:]] == [239, 239, 93]     # 197 + 239 + 239 + 93 = 768
+    assert b"".join(x[5:] for x in pkts[1:]) == data[197:]
+    assert p.split_transfer(2, 2, b"abc", 244, data_format=3)[0][:3] == bytes([0xAD, 0x12, 0x34])
+
+
+def test_pattern_and_effect_requests():
+    for r in V2["read_req"]:
+        assert p.build_pattern_read(r["page"], r["file"], r["frame"], r["off"]) == bytes(r["data"])
+    for r in V2["effect_req"]:
+        assert p.build_effect_read(r["page"], r["step"]) == bytes(r["data"])
+
+
+def test_pattern_chunk_parse_matches_app():
+    for ch in V2["chunks"]:
+        header, pts = p.parse_pattern_chunk(bytes(ch["msg"]))
+        assert header == ch["header"]
+        assert len(pts) == len(ch["points"])
+        for got, want in zip(pts, ch["points"]):
+            assert (got[0], got[1], got[2]) == (want["x"], want["y"], want["state"])
+            assert "#%06X" % got[3] == want["c"]
+
+
+def test_max_points():
+    assert p.max_points(8, 3) == (512 * 8 - 128) // 6
+    assert p.max_points(8, 4) == 512 * 8 - 128

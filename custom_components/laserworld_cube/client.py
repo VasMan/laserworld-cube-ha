@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import protocol as p
+from . import stroke_font
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +26,10 @@ class CubeError(Exception):
 
 class CubeFatalError(CubeError):
     """Problem that retrying will not fix."""
+
+
+class CubeUserError(CubeError):
+    """Invalid request (e.g. text too long); the link itself is fine."""
 
 
 class NotActivated(CubeFatalError):
@@ -77,6 +82,17 @@ class CubeLink:
         self.loop_mode = 0
         self.loop_interval = 5.0
         self._loop_task: asyncio.Task | None = None
+        # thumbnails: "page_file" -> flat [x, y, state, rgb, ...] read from the laser
+        self.thumbs: dict[str, list[int]] = {}
+        self.thumb_status = ""
+        self.on_thumbs_changed: Callable[[], None] | None = None
+        self.store: Any = None
+        self._thumb_task: asyncio.Task | None = None
+        # text
+        self.text = ""
+        self.text_color = 1
+        self.text_size = 100
+        self.text_active = False
 
     # ------------------------------------------------------------ listeners
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -277,7 +293,7 @@ class CubeLink:
         if self._idle_handle:
             self._idle_handle.cancel()
             self._idle_handle = None
-        if self.idle_timeout > 0 and self._client is not None and not self.loop_on:
+        if self.idle_timeout > 0 and self._client is not None and not self.loop_on and not self._thumbs_running():
             loop = asyncio.get_running_loop()
             self._idle_handle = loop.call_later(
                 self.idle_timeout, lambda: loop.create_task(self.disconnect()))
@@ -285,6 +301,7 @@ class CubeLink:
     async def disconnect(self) -> None:
         """Politely close the link so the phone app can connect again."""
         self._cancel_loop()
+        self._cancel_thumbs()
         if self._idle_handle:
             self._idle_handle.cancel()
             self._idle_handle = None
@@ -317,6 +334,8 @@ class CubeLink:
                     return result
                 except CubeFatalError:
                     await self._drop()
+                    raise
+                except CubeUserError:
                     raise
                 except Exception as err:  # noqa: BLE001
                     last = err
@@ -402,6 +421,7 @@ class CubeLink:
         self.run_mode = p.RUN_MODE_APP
         self.play_state = p.PLAY_STATE_PLAY
         self.pattern_index = n
+        self.text_active = False
         self._notify()
 
     async def async_step(self, delta: int) -> None:
@@ -424,6 +444,7 @@ class CubeLink:
 
     async def async_stop(self) -> None:
         self._cancel_loop()
+        self.text_active = False
         await self.async_set_play_state(p.PLAY_STATE_STOP)
 
     async def async_play(self) -> None:
@@ -515,3 +536,214 @@ class CubeLink:
                 self.loop_on = False
                 self._arm_idle()
                 self._notify()
+
+    # ------------------------------------------------------------- thumbnails
+    @staticmethod
+    def thumb_key(page: int, file: int) -> str:
+        return f"{page}_{file}"
+
+    def get_thumb(self, lib: p.Library, n: int) -> list[int] | None:
+        try:
+            page, file = lib.item(n)
+        except ValueError:
+            return None
+        return self.thumbs.get(self.thumb_key(page, file))
+
+    def _thumbs_running(self) -> bool:
+        return self._thumb_task is not None and not self._thumb_task.done()
+
+    def _cancel_thumbs(self) -> None:
+        task, self._thumb_task = self._thumb_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _thumbs_changed(self) -> None:
+        self._notify()
+        if self.on_thumbs_changed:
+            self.on_thumbs_changed()
+
+    async def _read_points(self, pat_lib: int, pat_idx: int) -> list[p.DevicePoint]:
+        """Read all points of frame 1 of a pattern (several replies of <=80 points)."""
+        points: list[p.DevicePoint] = []
+        total = 0
+        offset = 1  # the app starts at 1, then continues from the count so far
+        for _ in range(64):
+            resp = await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SEARCH_PATTERN_LIB_DATA,
+                                        p.build_pattern_read(pat_lib, pat_idx, 1, offset))
+            header, chunk = p.parse_pattern_chunk(resp)
+            total = header["pointTotal"]
+            if points and chunk and chunk[0] == points[-1]:
+                chunk = chunk[1:]          # replies overlap by one point
+            if not chunk:
+                break
+            points.extend(chunk)
+            if len(points) >= total:
+                break
+            offset = len(points)
+        return points
+
+    async def _read_item_points(self, lib: p.Library, n: int) -> list[p.DevicePoint]:
+        page, file = lib.item(n)
+        pat_lib, pat_idx = page, file
+        if page in lib.effect_pages:
+            resp = await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SEARCH_EFFECT_LIB_DATA,
+                                        p.build_effect_read(page, file))
+            step = p.parse_effect_step(resp)
+            pat_lib, pat_idx = step["pattern_lib"], step["pattern_index"]
+            if pat_lib == 0:
+                return []
+        return await self._read_points(pat_lib, pat_idx)
+
+    async def async_start_thumbnails(self, library_index: int | None = None, *,
+                                     rebuild: bool = False) -> None:
+        """Read the patterns of a library from the laser and cache thumbnails.
+
+        Runs in the background; progress is in ``thumb_status``.
+        """
+        if self._thumbs_running():
+            raise CubeUserError("Thumbnails are already being built")
+        idx = self.selected_library if library_index is None else library_index
+        if not 0 <= idx < len(self.libraries):
+            raise CubeUserError("No pattern libraries loaded yet - press 'Read settings'")
+        lib = self.libraries[idx]
+        self._thumb_task = asyncio.get_running_loop().create_task(self._thumb_runner(lib, rebuild))
+        self.thumb_status = f"{lib.name}: starting"
+        self._notify()
+
+    async def async_cancel_thumbnails(self) -> None:
+        self._cancel_thumbs()
+        self.thumb_status = "Cancelled"
+        self._thumbs_changed()
+
+    async def _thumb_runner(self, lib: p.Library, rebuild: bool) -> None:
+        me = asyncio.current_task()
+        failures = 0
+        try:
+            for n in range(1, lib.size + 1):
+                page, file = lib.item(n)
+                key = self.thumb_key(page, file)
+                if key in self.thumbs and not rebuild:
+                    continue
+
+                async def op(n: int = n) -> list[p.DevicePoint]:
+                    return await self._read_item_points(lib, n)
+                try:
+                    pts = await self._run(op)
+                except CubeFatalError:
+                    raise
+                except Exception as err:  # noqa: BLE001
+                    failures += 1
+                    _LOGGER.warning("thumbnail %s #%d failed: %s", lib.name, n, err)
+                    if failures >= 3:
+                        raise CubeError("too many read errors") from err
+                    continue
+                flat: list[int] = []
+                for x, y, state, rgb in pts:
+                    flat += [x, y, state, rgb]
+                self.thumbs[key] = flat
+                self.thumb_status = f"{lib.name}: {n}/{lib.size}"
+                if n % 4 == 0:
+                    self._thumbs_changed()
+            self.thumb_status = f"{lib.name}: done ({lib.size} patterns)"
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            self.thumb_status = f"{lib.name}: failed ({err})"
+        finally:
+            if self._thumb_task is me:
+                self._thumb_task = None
+                self._arm_idle()
+            self._thumbs_changed()
+
+    # -------------------------------------------------------------------- text
+    def _text_frames(self, text: str, fmt: int) -> list[list[p.Path]]:
+        strokes = stroke_font.layout(text)
+        if not strokes:
+            raise CubeUserError("Nothing to draw")
+        palette = p.PALETTE
+        paths: list[p.Path] = []
+        for char_i, stroke in strokes:
+            if self.text_color == 8:
+                rgb = palette[p.RAINBOW[char_i % len(p.RAINBOW)]]
+            else:
+                rgb = palette[self.text_color]
+            paths.append([(x, y, rgb) for x, y in stroke])
+        w = max(x for path in paths for x, _, _ in path)
+        h = max(y for path in paths for _, y, _ in path)
+        w, h = max(w, 0.5), max(h, 0.5)
+        scale = max(0.1, min(1.0, self.text_size / 100))
+        vw, vh = w / scale, h / scale                 # virtual canvas the text sits centred in
+        sx, sy = (vw - w) / 2, (vh - h) / 2
+        paths = [[(x + sx, y + sy, rgb) for x, y, rgb in path] for path in paths]
+        return [p.normalize_frame(paths, vw, vh)]
+
+    async def _transfer_stream(self, packets: list[bytes]) -> None:
+        """Send a multi-packet transfer, one reply per packet."""
+        for packet in packets:
+            for _ in range(3):
+                resp = await self._exchange(packet)
+                status = p.parse_status(resp, p.RSP_TRANSFER)
+                if status == 1:      # resend this packet
+                    continue
+                if status in (0, 2, 3):
+                    break
+                raise p.DeviceStatusError(status)
+            else:
+                raise CubeError("device kept asking to resend")
+
+    async def async_play_text(self, text: str | None = None) -> None:
+        """Show ``text`` on the laser (real-time play, like the app's Text page)."""
+        if text is not None:
+            self.text = text
+        message = self.text.strip("\n")
+        if not message.strip():
+            raise CubeUserError("Enter some text first")
+
+        async def op() -> None:
+            fmt = self.info.data_format
+            if fmt not in (3, 4):
+                raise CubeUserError(
+                    f"This laser uses point data format {fmt}; text playback supports 3 and 4")
+            frames = self._text_frames(message, fmt)
+            count = sum(len(path) for frame in frames for path in frame)
+            limit = p.max_points(self.info.scene_max, fmt) if self.info.scene_max else 2000
+            if count > limit:
+                raise CubeUserError(f"Text too long ({count} points, the laser accepts {limit})")
+            data = p.encode_frames(frames, fmt)
+            packets = p.split_transfer(p.FUNC_REAL_TIME_PLAY, p.ACT_PLAY_START, data,
+                                       self.info.buffer_max or 244, data_format=fmt,
+                                       layers=len(frames), frame=0)
+            _LOGGER.debug("text %r: %d points, %d bytes, %d packets", message, count, len(data), len(packets))
+            await self._transfer(p.FUNC_MY_DEVICE, p.ACT_ENABLE_LASER_OUTPUT,
+                                 p.build_enable_payload(self.laser_on, p.RUN_MODE_APP,
+                                                        p.PLAY_STATE_PLAY))
+            await self._transfer_stream(packets)
+        await self._run(op)
+        self.run_mode = p.RUN_MODE_APP
+        self.play_state = p.PLAY_STATE_PLAY
+        self.text_active = True
+        self._cancel_loop()
+        self._notify()
+
+    async def async_clear_text(self) -> None:
+        async def op() -> None:
+            await self._transfer(p.FUNC_REAL_TIME_PLAY, p.ACT_CLEAR_PLAY_DATA, None)
+        await self._run(op)
+        self.text_active = False
+        self._notify()
+
+    async def async_set_text_color(self, index: int) -> None:
+        if index not in p.TEXT_COLORS:
+            raise ValueError("invalid text colour")
+        self.text_color = index
+        if self.text_active:
+            await self.async_play_text()
+        else:
+            self._notify()
+
+    async def async_set_text_size(self, percent: float) -> None:
+        self.text_size = int(max(10, min(100, percent)))
+        if self.text_active:
+            await self.async_play_text()
+        else:
+            self._notify()
