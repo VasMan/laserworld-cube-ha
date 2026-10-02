@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -89,10 +90,19 @@ class CubeLink:
         self.store: Any = None
         self._thumb_task: asyncio.Task | None = None
         # text
-        self.text = ""
+        self.text = "Alexandros"
         self.text_color = 1
         self.text_size = 100
         self.text_active = False
+        self.text_orientation = 0
+        self.text_reverse = False
+        self.text_flow_set = False          # we switched the laser's colour flow on for text
+        self._text_box: tuple[float, float] | None = None
+        # motion effects driven from here (position / rotation / size of the output)
+        self.effect = 0
+        self.effect_speed = 50
+        self._effect_task: asyncio.Task | None = None
+        self.overview_page: int | None = None   # None = follow the current pattern
 
     # ------------------------------------------------------------ listeners
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -293,7 +303,8 @@ class CubeLink:
         if self._idle_handle:
             self._idle_handle.cancel()
             self._idle_handle = None
-        if self.idle_timeout > 0 and self._client is not None and not self.loop_on and not self._thumbs_running():
+        if self.idle_timeout > 0 and self._client is not None and not self.loop_on and not self._thumbs_running() \
+                and not self._effect_running():
             loop = asyncio.get_running_loop()
             self._idle_handle = loop.call_later(
                 self.idle_timeout, lambda: loop.create_task(self.disconnect()))
@@ -302,6 +313,7 @@ class CubeLink:
         """Politely close the link so the phone app can connect again."""
         self._cancel_loop()
         self._cancel_thumbs()
+        await self._stop_effect(restore=True)
         if self._idle_handle:
             self._idle_handle.cancel()
             self._idle_handle = None
@@ -400,6 +412,7 @@ class CubeLink:
             raise ValueError("unknown library")
         self.selected_library = index
         self.pattern_index = 1
+        self.overview_page = None
         self._notify()
 
     async def async_play_index(self, n: int | None = None) -> None:
@@ -421,6 +434,7 @@ class CubeLink:
         self.run_mode = p.RUN_MODE_APP
         self.play_state = p.PLAY_STATE_PLAY
         self.pattern_index = n
+        self.overview_page = None
         self.text_active = False
         self._notify()
 
@@ -657,7 +671,8 @@ class CubeLink:
 
     # -------------------------------------------------------------------- text
     def _text_frames(self, text: str, fmt: int) -> list[list[p.Path]]:
-        strokes = stroke_font.layout(text)
+        strokes = stroke_font.layout(text[::-1] if self.text_reverse else text,
+                                     vertical=self.text_orientation == 1)
         if not strokes:
             raise CubeUserError("Nothing to draw")
         palette = p.PALETTE
@@ -665,12 +680,15 @@ class CubeLink:
         for char_i, stroke in strokes:
             if self.text_color == 8:
                 rgb = palette[p.RAINBOW[char_i % len(p.RAINBOW)]]
+            elif self.text_color == 9:
+                rgb = palette[1]                      # white; the laser's colour flow recolours it
             else:
                 rgb = palette[self.text_color]
             paths.append([(x, y, rgb) for x, y in stroke])
         w = max(x for path in paths for x, _, _ in path)
         h = max(y for path in paths for _, y, _ in path)
         w, h = max(w, 0.5), max(h, 0.5)
+        self._text_box = (w, h)
         scale = max(0.1, min(1.0, self.text_size / 100))
         vw, vh = w / scale, h / scale                 # virtual canvas the text sits centred in
         sx, sy = (vw - w) / 2, (vh - h) / 2
@@ -718,7 +736,18 @@ class CubeLink:
                                  p.build_enable_payload(self.laser_on, p.RUN_MODE_APP,
                                                         p.PLAY_STATE_PLAY))
             await self._transfer_stream(packets)
-        await self._run(op)
+            # "Color flow" text uses the laser's colour-flow mode; leave it again otherwise
+            if self.text_color == 9 or self.text_flow_set:
+                mode = self.flow_precision if self.text_color == 9 else 0
+                params = {**self.run_params, "runParaColorMode": mode}
+                await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SET_RUN_PARAMETERS,
+                                     p.build_run_params(params))
+                return params
+            return None
+        params = await self._run(op)
+        if params is not None:
+            self.run_params = params
+            self.text_flow_set = params["runParaColorMode"] != 0
         self.run_mode = p.RUN_MODE_APP
         self.play_state = p.PLAY_STATE_PLAY
         self.text_active = True
@@ -741,9 +770,187 @@ class CubeLink:
         else:
             self._notify()
 
+    async def async_set_text_orientation(self, index: int) -> None:
+        if index not in p.TEXT_ORIENTATIONS:
+            raise ValueError("invalid orientation")
+        self.text_orientation = index
+        await self._replay_text()
+
+    async def async_set_text_direction(self, index: int) -> None:
+        if index not in p.TEXT_DIRECTIONS:
+            raise ValueError("invalid direction")
+        self.text_reverse = index == 1
+        await self._replay_text()
+
+    async def _replay_text(self) -> None:
+        if self.text_active:
+            await self.async_play_text()
+        else:
+            self._notify()
+
     async def async_set_text_size(self, percent: float) -> None:
         self.text_size = int(max(10, min(100, percent)))
         if self.text_active:
             await self.async_play_text()
         else:
             self._notify()
+
+    # ----------------------------------------------------------- overview pages
+    def overview_pages(self) -> int:
+        lib = self.current_library
+        return max(1, -(-lib.size // p.OVERVIEW_PAGE)) if lib else 1
+
+    def current_overview_page(self) -> int:
+        if self.overview_page is not None:
+            return min(max(1, self.overview_page), self.overview_pages())
+        return (self.pattern_index - 1) // p.OVERVIEW_PAGE + 1
+
+    async def async_set_overview_page(self, page: int) -> None:
+        self.overview_page = min(max(1, int(page)), self.overview_pages())
+        self._notify()
+
+    async def async_overview_step(self, delta: int) -> None:
+        pages = self.overview_pages()
+        await self.async_set_overview_page((self.current_overview_page() - 1 + delta) % pages + 1)
+
+    # --------------------------------------------------------- device settings
+    async def async_set_device_settings(self, **values: int) -> None:
+        """Change persistent device settings (the app's "Laser device settings").
+
+        Like the app, this re-reads the whole settings block, changes the given
+        fields and writes the block back.
+        """
+        clean: dict[str, int] = {}
+        for key, value in values.items():
+            limits = p.DEVICE_SETTING_LIMITS.get(key)
+            if limits is None:
+                raise CubeUserError(f"{key} cannot be changed")
+            value = int(value)
+            if not limits[0] <= value <= limits[1]:
+                raise CubeUserError(f"{key} must be between {limits[0]} and {limits[1]}")
+            if key == "deviceScannerRate" and value not in p.SCAN_SPEEDS:
+                raise CubeUserError(f"scan speed must be one of {p.SCAN_SPEEDS}")
+            clean[key] = value
+
+        async def op() -> dict[str, int]:
+            resp = await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SEARCH_DEVICE_SET_MODEL)
+            try:
+                model = p.parse_fields(p.parse_data_response(resp), p.DEVICE_MODEL_FIELDS,
+                                       required="deviceframeRate")
+            except p.ProtocolError as err:
+                raise CubeUserError(
+                    f"The laser returned an incomplete settings block ({err}); not writing") from err
+            model.update(clean)
+            await self._transfer(p.FUNC_MY_DEVICE, p.ACT_DEVICE_SET_MODEL, p.build_device_model(model))
+            return model
+        model = await self._run(op)
+        self.device_model = {**self.device_model, **model}
+        _LOGGER.info("device settings changed: %s", clean)
+        self._notify()
+
+    # ----------------------------------------------------------------- effects
+    def _effect_running(self) -> bool:
+        return self._effect_task is not None and not self._effect_task.done()
+
+    def _effect_period(self) -> float:
+        """Seconds per cycle: 30 s at speed 1 down to 1.5 s at speed 100."""
+        speed = min(100, max(1, self.effect_speed))
+        return 30.0 * (1.5 / 30.0) ** ((speed - 1) / 99)
+
+    def _content_fractions(self) -> tuple[float, float]:
+        """Width/height of what is shown, as a fraction of the laser's field."""
+        sx = self.run_params["runsizeX"] / 100
+        sy = self.run_params["runsizeY"] / 100
+        if self.text_active and self._text_box:
+            w, h = self._text_box
+            k = self.text_size / 100 / max(w, h)
+            return sx * k * w, sy * k * h
+        return sx, sy
+
+    def _effect_params(self, effect: int, phase: float) -> dict[str, int]:
+        """Run parameters for one animation frame (never moves content out of the field)."""
+        params = dict(self.run_params)
+        wf, hf = self._content_fractions()
+        tri = 1 - abs(2 * phase - 1)
+        if effect in (1, 2, 3):
+            amp = max(0.0, 1 - wf) * 127.5
+            pos = {1: phase, 2: 1 - phase, 3: tri}[effect]
+            params["runPositionX"] = round(127.5 - amp + pos * 2 * amp)
+        elif effect == 4:
+            amp = max(0.0, 1 - hf) * 127.5
+            params["runPositionY"] = round(127.5 - amp + tri * 2 * amp)
+        elif effect == 5:
+            params["runRotateZ"] = int(phase * 360) % 360
+            radius = math.hypot(wf, hf)
+            if radius > 1:                       # keep the rotating content inside the field
+                for key in ("runsizeX", "runsizeY"):
+                    params[key] = max(10, int(params[key] / radius))
+        elif effect == 6:
+            factor = 0.3 + 0.7 * tri
+            for key in ("runsizeX", "runsizeY"):
+                params[key] = max(10, round(params[key] * factor))
+        return params
+
+    async def _send_run_params(self, params: dict[str, int]) -> None:
+        async def op() -> None:
+            await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SET_RUN_PARAMETERS,
+                                 p.build_run_params(params))
+        await self._run(op)
+
+    async def _stop_effect(self, restore: bool) -> None:
+        task, self._effect_task = self._effect_task, None
+        was = self.effect != 0
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if was:
+            self.effect = 0
+            if restore:
+                try:
+                    await self._send_run_params(self.run_params)   # put the output back
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("could not restore parameters after effect", exc_info=True)
+            self._notify()
+
+    async def async_set_effect(self, effect: int) -> None:
+        if effect not in p.EFFECTS:
+            raise ValueError("invalid effect")
+        await self._stop_effect(restore=True)
+        if effect == 0:
+            self._notify()
+            return
+        wf, hf = self._content_fractions()
+        if (effect in (1, 2, 3) and wf > 0.97) or (effect == 4 and hf > 0.97):
+            raise CubeUserError(
+                "There is no room to move: reduce 'Text size' (or Size X/Y) first, "
+                "e.g. to 50 %, so the content can travel across the field.")
+        self.effect = effect
+        self._effect_task = asyncio.get_running_loop().create_task(self._effect_runner())
+        self._notify()
+
+    async def async_set_effect_speed(self, speed: float) -> None:
+        self.effect_speed = int(min(100, max(1, speed)))
+        self._notify()
+
+    async def _effect_runner(self) -> None:
+        me = asyncio.current_task()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        try:
+            while self.effect:
+                phase = ((loop.time() - t0) / self._effect_period()) % 1.0
+                await self._send_run_params(self._effect_params(self.effect, phase))
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("effect stopped: %s", err)
+        finally:
+            if self._effect_task is me:
+                self._effect_task = None
+                self.effect = 0
+                self._arm_idle()
+                self._notify()

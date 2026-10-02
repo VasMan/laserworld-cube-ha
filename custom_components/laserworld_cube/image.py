@@ -4,10 +4,10 @@ from __future__ import annotations
 from homeassistant.components.image import ImageEntity
 from homeassistant.util import dt as dt_util
 
-from . import thumbs
+from . import protocol, thumbs
 from .entity import CubeEntity
 
-PAGE = 20  # patterns per overview sheet (5 x 4)
+PAGE = protocol.OVERVIEW_PAGE  # patterns per overview sheet (5 x 4)
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -74,7 +74,7 @@ class CubeLibraryOverview(_CubeImage):
         lib = self.link.current_library
         if lib is None:
             return None, 0, 0
-        start = (self.link.pattern_index - 1) // PAGE * PAGE + 1
+        start = (self.link.current_overview_page() - 1) * PAGE + 1
         return lib, start, min(start + PAGE - 1, lib.size)
 
     def _signature(self):
@@ -83,7 +83,7 @@ class CubeLibraryOverview(_CubeImage):
             return None
         have = tuple(len(self.link.get_thumb(lib, n) or ()) if self.link.get_thumb(lib, n) is not None else -1
                      for n in range(a, b + 1))
-        return (self.link.selected_library, a, self.link.pattern_index, have)
+        return (self.link.selected_library, a, self.link.pattern_index, have)  # a = first pattern of the page
 
     def _render(self) -> bytes:
         lib, a, b = self._page()
@@ -91,5 +91,7 @@ class CubeLibraryOverview(_CubeImage):
             return thumbs.render_pattern(None, 320, "No library loaded")
         items = [(n, self.link.get_thumb(lib, n)) for n in range(a, b + 1)]
         missing = sum(1 for _, f in items if f is None)
-        title = f"{lib.name}  {a}-{b} of {lib.size}" + ("   (press 'Build thumbnails')" if missing == len(items) else "")
+        pages = self.link.overview_pages()
+        title = (f"{lib.name}  {a}-{b} of {lib.size}   (page {self.link.current_overview_page()}/{pages})"
+                 + ("   - press 'Build thumbnails'" if missing == len(items) else ""))
         return thumbs.render_sheet(items, self.link.pattern_index, title=title)

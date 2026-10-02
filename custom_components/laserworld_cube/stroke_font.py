@@ -181,12 +181,15 @@ def _strip(ch: str) -> str:
             "–": "-", "—": "-", "‘": "'", "’": "'", "“": '"', "”": '"'}.get(ch, "?")
 
 
-def layout(text: str, color_by_char: bool = False) -> list[tuple[int, Stroke]]:
+def layout(text: str, vertical: bool = False) -> list[tuple[int, Stroke]]:
     """Lay out text. Returns ``[(char_index, polyline)]`` in laser canvas
     coordinates (x right, y DOWN, origin top-left of the text block).
 
     ``char_index`` counts visible characters so callers can colour per letter.
+    With ``vertical`` the characters are stacked top to bottom, each centred.
     """
+    if vertical:
+        return _layout_vertical(text)
     lines = text.split("\n")
     out: list[tuple[int, Stroke]] = []
     visible = 0
@@ -205,6 +208,23 @@ def layout(text: str, color_by_char: bool = False) -> list[tuple[int, Stroke]]:
             visible += 1
     if not out:
         return []
+    minx = min(px for _, s in out for px, _ in s)
+    miny = min(py for _, s in out for _, py in s)
+    return [(i, [(round(px - minx, 3), round(py - miny, 3)) for px, py in s]) for i, s in out]
+
+
+def _layout_vertical(text: str) -> list[tuple[int, Stroke]]:
+    chars = [c for c in text.replace("\n", " ") if c != " "]
+    if not chars:
+        return []
+    widest = max(G[_strip(c)][0] for c in chars)
+    out: list[tuple[int, Stroke]] = []
+    for row, raw in enumerate(chars):
+        width, strokes = G[_strip(raw)]
+        dx = (widest - width) / 2
+        base = row * (LINE_HEIGHT - 1.5)
+        for stroke in strokes:
+            out.append((row, [(round(dx + px, 3), round(base - py, 3)) for px, py in stroke]))
     minx = min(px for _, s in out for px, _ in s)
     miny = min(py for _, s in out for _, py in s)
     return [(i, [(round(px - minx, 3), round(py - miny, 3)) for px, py in s]) for i, s in out]

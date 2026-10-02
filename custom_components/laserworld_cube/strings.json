@@ -40,6 +40,21 @@
       },
       "loop_play": {
         "name": "Loop play"
+      },
+      "safety": {
+        "name": "Safety"
+      },
+      "master": {
+        "name": "Master"
+      },
+      "invert_x": {
+        "name": "Invert X"
+      },
+      "invert_y": {
+        "name": "Invert Y"
+      },
+      "swap_xy": {
+        "name": "Swap X/Y"
       }
     },
     "select": {
@@ -63,6 +78,30 @@
       },
       "text_color": {
         "name": "Text color"
+      },
+      "text_orientation": {
+        "name": "Text orientation"
+      },
+      "text_direction": {
+        "name": "Text direction"
+      },
+      "effect": {
+        "name": "Effect"
+      },
+      "dmx_mode": {
+        "name": "DMX mode"
+      },
+      "functional_mode": {
+        "name": "Functional mode"
+      },
+      "scan_speed": {
+        "name": "Scanning speed"
+      },
+      "color_setting": {
+        "name": "Color setting"
+      },
+      "laser_type": {
+        "name": "Laser type"
       }
     },
     "number": {
@@ -93,14 +132,44 @@
       "loop_interval": {
         "name": "Loop interval"
       },
-      "color_flow": {
-        "name": "Color flow"
-      },
-      "color_speed": {
-        "name": "Color flow speed"
-      },
       "text_size": {
         "name": "Text size"
+      },
+      "flow_zones": {
+        "name": "Flow zones"
+      },
+      "flow_speed": {
+        "name": "Flow speed"
+      },
+      "effect_speed": {
+        "name": "Effect speed"
+      },
+      "overview_page": {
+        "name": "Overview page"
+      },
+      "dmx_address": {
+        "name": "DMX address"
+      },
+      "device_size_x": {
+        "name": "Device size X"
+      },
+      "device_size_y": {
+        "name": "Device size Y"
+      },
+      "device_position_x": {
+        "name": "Device position X"
+      },
+      "device_position_y": {
+        "name": "Device position Y"
+      },
+      "red_max": {
+        "name": "Red maximum"
+      },
+      "green_max": {
+        "name": "Green maximum"
+      },
+      "blue_max": {
+        "name": "Blue maximum"
       }
     },
     "button": {
@@ -111,7 +180,7 @@
         "name": "Disconnect Bluetooth"
       },
       "play": {
-        "name": "Play"
+        "name": "Play pattern"
       },
       "pause": {
         "name": "Pause"
@@ -139,6 +208,12 @@
       },
       "cancel_thumbnails": {
         "name": "Cancel thumbnail build"
+      },
+      "overview_previous": {
+        "name": "Overview previous page"
+      },
+      "overview_next": {
+        "name": "Overview next page"
       }
     },
     "text": {

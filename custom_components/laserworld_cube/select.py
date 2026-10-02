@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from homeassistant.components.select import SelectEntity
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import protocol as p
@@ -42,6 +43,12 @@ SELECTS = (
               lambda l, v: l.async_set_pattern_color(v), None, "mdi:palette-swatch"),
     SelectDef("text_color", p.TEXT_COLORS, lambda l: l.text_color,
               lambda l, v: l.async_set_text_color(v), None, "mdi:format-color-text"),
+    SelectDef("text_orientation", p.TEXT_ORIENTATIONS, lambda l: l.text_orientation,
+              lambda l, v: l.async_set_text_orientation(v), None, "mdi:format-text-rotation-none"),
+    SelectDef("text_direction", p.TEXT_DIRECTIONS, lambda l: 1 if l.text_reverse else 0,
+              lambda l, v: l.async_set_text_direction(v), None, "mdi:swap-horizontal"),
+    SelectDef("effect", p.EFFECTS, lambda l: l.effect,
+              lambda l, v: l.async_set_effect(v), None, "mdi:animation-play"),
     SelectDef("loop_mode", p.LOOP_MODES, lambda l: l.loop_mode,
               lambda l, v: l.async_set_loop_mode(v), None, "mdi:repeat"),
 )
@@ -54,7 +61,11 @@ def _pattern_color(link: CubeLink) -> int:
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
-    async_add_entities([*(CubeSelect(link, entry, d) for d in SELECTS), CubeLibrarySelect(link, entry)])
+    async_add_entities([
+        *(CubeSelect(link, entry, d) for d in SELECTS),
+        CubeLibrarySelect(link, entry),
+        *(CubeSettingSelect(link, entry, d) for d in SETTING_SELECTS),
+    ])
 
 
 class CubeSelect(CubeEntity, SelectEntity, RestoreEntity):
@@ -103,3 +114,55 @@ class CubeLibrarySelect(CubeEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.call(self.link.async_select_library(self.options.index(option)))
+
+
+@dataclass(frozen=True)
+class SettingSelectDef:
+    key: str
+    field: str                                   # field in the laser's settings block
+    options: Callable[[CubeLink], dict[int, str]]
+    icon: str | None = None
+    enabled: bool = True
+
+
+def _dmx_modes(link: CubeLink) -> dict[int, str]:
+    m = link.device_model
+    std, pro = m.get("deviceStdChannleTotal"), m.get("deviceProChannleTotal")
+    return {0: f"DMX mode {std}CH" if std else "DMX mode (standard)",
+            1: f"DMX mode {pro}CH" if pro else "DMX mode (pro)"}
+
+
+SETTING_SELECTS = (
+    SettingSelectDef("dmx_mode", "deviceChannelMode", _dmx_modes, "mdi:dip-switch"),
+    SettingSelectDef("functional_mode", "deviceRunWorkMode", lambda l: p.FUNCTION_MODES, "mdi:cog-play"),
+    SettingSelectDef("scan_speed", "deviceScannerRate",
+                     lambda l: {k: f"{k}KPPS" for k in p.SCAN_SPEEDS}, "mdi:speedometer", enabled=False),
+    SettingSelectDef("color_setting", "deviceColorFunc",
+                     lambda l: {k: f"{k}.{v}" for k, v in p.COLOR_MODES.items()}, "mdi:palette-advanced"),
+    SettingSelectDef("laser_type", "deviceLaserType", lambda l: p.LASER_TYPES, "mdi:laser-pointer", enabled=False),
+)
+
+
+class CubeSettingSelect(CubeEntity, SelectEntity):
+    """A persistent device setting from the app's "Laser device settings"."""
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, link: CubeLink, entry, d: SettingSelectDef) -> None:
+        super().__init__(link, entry, d.key)
+        self._d = d
+        self._attr_translation_key = d.key
+        self._attr_icon = d.icon
+        self._attr_entity_registry_enabled_default = d.enabled
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._d.options(self.link).values())
+
+    @property
+    def current_option(self) -> str | None:
+        value = self.link.device_model.get(self._d.field)
+        return self._d.options(self.link).get(value) if value is not None else None
+
+    async def async_select_option(self, option: str) -> None:
+        by_name = {v: k for k, v in self._d.options(self.link).items()}
+        await self.call(self.link.async_set_device_settings(**{self._d.field: by_name[option]}))

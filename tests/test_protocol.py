@@ -128,3 +128,15 @@ def test_pattern_chunk_parse_matches_app():
 def test_max_points():
     assert p.max_points(8, 3) == (512 * 8 - 128) // 6
     assert p.max_points(8, 4) == 512 * 8 - 128
+
+
+V3 = json.loads((HERE / "vectors3.json").read_text())
+
+
+def test_device_model_write_payload_matches_app():
+    assert p.build_device_model(V3["model"]) == bytes(V3["bytes"])
+    assert len(p.build_device_model(V3["model"])) == 134
+    # every settable field exists in the block and has sane limits
+    names = {n for n, _ in p.DEVICE_MODEL_FIELDS}
+    assert set(p.DEVICE_SETTING_LIMITS) <= names
+    assert all(lo <= hi for lo, hi in p.DEVICE_SETTING_LIMITS.values())

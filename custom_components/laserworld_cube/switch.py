@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.const import EntityCategory
 
 from .entity import CubeEntity
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
-    async_add_entities([CubeLaserSwitch(entry.runtime_data, entry),
-                        CubeLoopSwitch(entry.runtime_data, entry)])
+    link = entry.runtime_data
+    async_add_entities([CubeLaserSwitch(link, entry), CubeLoopSwitch(link, entry),
+                        *(CubeSettingSwitch(link, entry, *d) for d in SETTING_SWITCHES)])
 
 
 class CubeLaserSwitch(CubeEntity, SwitchEntity):
@@ -56,3 +58,36 @@ class CubeLoopSwitch(CubeEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.call(self.link.async_set_loop(False))
+
+
+# key, settings field, icon, enabled by default
+SETTING_SWITCHES = (
+    ("safety", "devicesafety", "mdi:shield-check", False),
+    ("master", "deviceMasterFunc", "mdi:account-supervisor", True),
+    ("invert_x", "deviceInvertX", "mdi:flip-horizontal", True),
+    ("invert_y", "deviceInvertY", "mdi:flip-vertical", True),
+    ("swap_xy", "deviceSwapXY", "mdi:swap-horizontal-variant", True),
+)
+
+
+class CubeSettingSwitch(CubeEntity, SwitchEntity):
+    """A persistent on/off device setting from the app's "Laser device settings"."""
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, link, entry, key: str, field: str, icon: str, enabled: bool) -> None:
+        super().__init__(link, entry, key)
+        self._field = field
+        self._attr_translation_key = key
+        self._attr_icon = icon
+        self._attr_entity_registry_enabled_default = enabled
+
+    @property
+    def is_on(self) -> bool | None:
+        value = self.link.device_model.get(self._field)
+        return None if value is None else value == 1
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.call(self.link.async_set_device_settings(**{self._field: 1}))
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.call(self.link.async_set_device_settings(**{self._field: 0}))

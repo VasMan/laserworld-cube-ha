@@ -64,6 +64,7 @@ class FakeDevice:
         self.stream = None           # reassembly of multi-packet transfers
         self.realtime = []           # (layers, frame, data) from REAL_TIME_PLAY/PLAY_START
         self.cleared = 0
+        self.model_writes = []      # raw DEVICE_SET_MODEL payloads
         self.frames = []            # (page, file) received via PATTERN_LIBRARY/FRAME_PLAYING
         self.enables = []           # raw ENABLE_LASER_OUTPUT payloads
         # (page, delete, step_total, file_total, files_number, merge)
@@ -131,6 +132,9 @@ class FakeDevice:
             self.realtime.append((layers, frame_b, bytes(data)))
         if func == 2 and action == p.ACT_CLEAR_PLAY_DATA:
             self.cleared += 1
+        if func == 1 and action == p.ACT_DEVICE_SET_MODEL:
+            self.model_writes.append(bytes(data))
+            self.model.update(p.parse_fields(data, p.DEVICE_MODEL_FIELDS))
         if func == 1 and action == p.ACT_SEARCH_PATTERN_LIB_DATA:
             off = int.from_bytes(data[10:12], "big")
             return p.encrypt(stored_chunk(data[0], data[2], off, sim_points(data[0], data[2])), *self.keys)
@@ -539,4 +543,151 @@ def test_text_errors_do_not_drop_the_link():
         await link.async_play_text("Hi"); await link.async_select_library(0); await link.async_play_index(1)
         assert not link.text_active
         await link.disconnect(); await link2.disconnect()
+    asyncio.run(go())
+
+
+def test_device_settings_read_modify_write():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_connect()
+        before = dict(dev.model)
+        await link.async_set_device_settings(deviceAddress=77, devicesafety=0)
+        assert len(dev.model_writes) == 1 and len(dev.model_writes[0]) == 134
+        assert dev.model["deviceAddress"] == 77 and dev.model["devicesafety"] == 0
+        for k, v in before.items():                       # everything else is written back unchanged
+            if k not in ("deviceAddress", "devicesafety"):
+                assert dev.model[k] == v, k
+        assert dev.model_writes[0][-96:] == bytes(96)       # reserve block is zero, like the app
+        assert link.device_model["deviceAddress"] == 77
+        # it re-reads before writing, so changes made elsewhere are not overwritten
+        dev.model["deviceSizeX"] = 55
+        await link.async_set_device_settings(deviceScannerRate=25)
+        assert dev.model["deviceSizeX"] == 55 and dev.model["deviceScannerRate"] == 25
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_device_settings_validation_and_incomplete_reply():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_connect()
+        for bad in ({"deviceAddress": 0}, {"deviceAddress": 513}, {"deviceScannerRate": 22},
+                    {"deviceScannerRate": 45}, {"deviceFoo": 1}, {"deviceRedMax": 101}):
+            try:
+                await link.async_set_device_settings(**bad)
+                raise AssertionError(bad)
+            except c.CubeUserError:
+                assert link.connected and not dev.model_writes
+        short = FakeDevice(model_len=20)                    # laser answers with an incomplete block
+        link2 = make_link(short, idle_timeout=0)
+        try:
+            await link2.async_set_device_settings(deviceAddress=5)
+            raise AssertionError("expected refusal")
+        except c.CubeUserError as err:
+            assert "incomplete" in str(err) and not short.model_writes
+        await link.disconnect(); await link2.disconnect()
+    asyncio.run(go())
+
+
+def test_text_orientation_direction_and_color_flow():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        assert link.text == "Alexandros"                      # preset text
+        await link.async_play_text()
+        horiz = _decode_points(dev.realtime[-1][2])
+        await link.async_set_text_orientation(1)              # vertical: tall, narrow
+        vert = _decode_points(dev.realtime[-1][2])
+        assert (max(y for _, y, _, _ in vert) - min(y for _, y, _, _ in vert)) > 60000
+        assert (max(x for x, *_ in vert) - min(x for x, *_ in vert)) < 30000
+        await link.async_set_text_orientation(0)
+        await link.async_set_text_direction(1)                # reverse the letters
+        rev = _decode_points(dev.realtime[-1][2])
+        assert rev != horiz and len(rev) == len(horiz)
+        await link.async_set_text_direction(0)
+        # colour flow: text is sent white and the laser's colour flow is switched on
+        await link.async_set_flow(precision=30)
+        await link.async_set_text_color(9)
+        assert {c_ for *_, c_ in _decode_points(dev.realtime[-1][2])} == {1}
+        sent = p.parse_fields(dev.received[-1][2], p.RUN_PARAM_FIELDS)
+        assert sent["runParaColorMode"] == 30 and link.text_flow_set
+        await link.async_set_text_color(2)                    # back to a plain colour: flow off again
+        assert p.parse_fields(dev.received[-1][2], p.RUN_PARAM_FIELDS)["runParaColorMode"] == 0
+        assert not link.text_flow_set
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def _run_params_since(dev, start):
+    return [p.parse_fields(d, p.RUN_PARAM_FIELDS) for f_, a, d in dev.received[start:]
+            if f_ == 1 and a == p.ACT_SET_RUN_PARAMETERS]
+
+
+def test_effects_move_within_the_field_and_restore():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0.05)               # idle timer must not interrupt an effect
+        await link.async_set_params(runsizeX=100, runsizeY=100)
+        await link.async_set_text_size(50)
+        await link.async_play_text("Hi")
+        await link.async_set_params(runPositionX=128, runPositionY=128)
+        # no room to move at 100 % size
+        await link.async_set_text_size(100)
+        try:
+            await link.async_set_effect(1); raise AssertionError("expected CubeUserError")
+        except c.CubeUserError:
+            assert link.effect == 0
+        await link.async_set_text_size(50)
+        link.effect_speed = 100
+        start = len(dev.received)
+        await link.async_set_effect(3)                          # bounce horizontal
+        await asyncio.sleep(0.8)
+        assert link.effect == 3 and link.connected
+        frames = _run_params_since(dev, start)
+        xs = [f_["runPositionX"] for f_ in frames]
+        assert len(set(xs)) > 5 and min(xs) >= 60 and max(xs) <= 196      # travels, but stays inside the field
+        assert link.run_params["runPositionX"] == 128                    # base values untouched while running
+        n = len(dev.received)
+        await link.async_set_effect(0)
+        last = _run_params_since(dev, n)[-1]
+        assert last["runPositionX"] == 128 and link.effect == 0          # output restored
+        await asyncio.sleep(0.2)
+        assert len(dev.received) == n + 1 or len(_run_params_since(dev, n)) == 1   # nothing keeps moving
+        # rotate keeps big content inside by shrinking it; pulse varies the size; vertical moves Y
+        await link.async_set_effect(5); await asyncio.sleep(0.5)
+        rot = _run_params_since(dev, n)[-10:]
+        assert len({f_["runRotateZ"] for f_ in rot}) > 3
+        await link.async_set_effect(6); await asyncio.sleep(0.5)
+        sizes = {f_["runsizeX"] for f_ in _run_params_since(dev, n)[-10:]}
+        assert min(sizes) < 100 and max(sizes) >= 30 and len(sizes) > 3
+        await link.async_set_effect(4); await asyncio.sleep(0.4)
+        assert len({f_["runPositionY"] for f_ in _run_params_since(dev, n)[-8:]}) > 2
+        # disconnecting stops the effect and restores the output
+        n2 = len(dev.received)
+        await link.disconnect()
+        assert link.effect == 0 and _run_params_since(dev, n2)[-1]["runPositionY"] == link.run_params["runPositionY"]
+    asyncio.run(go())
+
+
+def test_overview_paging():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_connect()
+        await link.async_select_library(4)                      # Hotspot (128) -> 7 pages of 20
+        assert link.overview_pages() == 7 and link.current_overview_page() == 1
+        await link.async_set_overview_page(3)
+        assert link.current_overview_page() == 3
+        await link.async_overview_step(1); assert link.current_overview_page() == 4
+        await link.async_set_overview_page(7); await link.async_overview_step(1)
+        assert link.current_overview_page() == 1                 # wraps
+        await link.async_overview_step(-1); assert link.current_overview_page() == 7
+        await link.async_set_overview_page(99); assert link.current_overview_page() == 7   # clamped
+        await link.async_play_index(45)                          # playing something follows it again
+        assert link.overview_page is None and link.current_overview_page() == 3
+        await link.async_select_library(0)
+        assert link.overview_pages() == 1
+        await link.disconnect()
     asyncio.run(go())

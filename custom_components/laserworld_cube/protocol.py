@@ -81,9 +81,32 @@ PATTERN_COLORS = {
     0: "Original colors", 1: "White", 2: "Red", 3: "Yellow", 4: "Green",
     5: "Cyan", 6: "Blue", 7: "Purple", 8: "Flowing",
 }
-# text colours: palette index 1-7, or 8 = a different colour per letter
+# text colours: palette index 1-7, 8 = a different colour per letter,
+# 9 = white text recoloured by the laser's colour-flow mode
 TEXT_COLORS = {1: "White", 2: "Red", 3: "Yellow", 4: "Green", 5: "Cyan", 6: "Blue",
-               7: "Purple", 8: "Rainbow"}
+               7: "Purple", 8: "Rainbow", 9: "Color flow"}
+TEXT_ORIENTATIONS = {0: "Horizontal", 1: "Vertical"}
+TEXT_DIRECTIONS = {0: "Forward", 1: "Reverse"}
+# Motion effects driven from Home Assistant (the app's own effects are cloud-defined)
+EFFECTS = {0: "None", 1: "Scroll right", 2: "Scroll left", 3: "Bounce horizontal",
+           4: "Bounce vertical", 5: "Rotate", 6: "Pulse"}
+
+OVERVIEW_PAGE = 20  # thumbnails per overview sheet (5 x 4)
+
+# persistent device settings ("Laser device settings" in the app)
+FUNCTION_MODES = {0: "DMX512 mode", 1: "Auto mode", 2: "Music mode", 3: "ILDA mode"}
+SCAN_SPEEDS = (15, 20, 25, 30, 35, 40)  # KPPS
+LASER_TYPES = {0: "TTL", 1: "Analog"}
+# allowed values per settings field (min, max); anything else is refused
+DEVICE_SETTING_LIMITS: dict[str, tuple[int, int]] = {
+    "deviceAddress": (1, 512), "deviceChannelMode": (0, 1), "deviceRunWorkMode": (0, 3),
+    "deviceScannerRate": (15, 40), "deviceMasterFunc": (0, 1), "devicesafety": (0, 1),
+    "deviceColorFunc": (1, 12), "deviceLaserType": (0, 1),
+    "deviceSizeX": (10, 100), "deviceSizeY": (10, 100),
+    "devicePositionX": (0, 255), "devicePositionY": (0, 255),
+    "deviceInvertX": (0, 1), "deviceInvertY": (0, 1), "deviceSwapXY": (0, 1),
+    "deviceRedMax": (0, 100), "deviceGreenMax": (0, 100), "deviceBlueMax": (0, 100),
+}
 RAINBOW = (2, 3, 4, 5, 6, 7)
 # client-side play modes of the official app
 LOOP_MODES = {0: "Loop", 1: "Random", 2: "Sequence", 3: "Single"}
@@ -342,6 +365,15 @@ def build_enable_payload(laser_on: bool, run_mode: int,
     """Payload of ENABLE_LASER_OUTPUT: [on/off, run mode(, play state)]."""
     out = bytes([1 if laser_on else 0, run_mode])
     return out if play_state is None else out + bytes([play_state])
+
+
+def build_device_model(model: dict[str, int]) -> bytes:
+    """Payload of DEVICE_SET_MODEL: the whole settings block (reserve bytes zero,
+    exactly like the official app writes it)."""
+    out = b""
+    for name, size in DEVICE_MODEL_FIELDS:
+        out += b"\x00" * size if name == "reserve" else _be(model[name], size)
+    return out
 
 
 def build_frame_play(page: int, file: int) -> bytes:

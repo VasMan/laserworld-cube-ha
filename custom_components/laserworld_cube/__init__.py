@@ -63,6 +63,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> bool
 
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
+    # the colour-flow numbers were renamed (Flow zones / Flow speed); drop the old, disabled ones
+    for ent in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+        if ent.unique_id.endswith(("_color_flow", "_color_speed")):
+            ent_reg.async_remove(ent.entity_id)
     device = dev_reg.async_get_device(identifiers={(DOMAIN, address)})
     if device is not None:
         # Safety net: make sure every entity of this entry hangs under the device
