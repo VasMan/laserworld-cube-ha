@@ -21,6 +21,7 @@ class SelectDef:
     set: Callable[[CubeLink, int], Awaitable[None]]
     restore: Callable[[CubeLink, int], None] | None = None
     icon: str | None = None
+    config: bool = False
 
 
 def _restore_run_mode(link: CubeLink, v: int) -> None:
@@ -49,6 +50,10 @@ SELECTS = (
               lambda l, v: l.async_set_text_direction(v), None, "mdi:swap-horizontal"),
     SelectDef("effect", p.EFFECTS, lambda l: l.effect,
               lambda l, v: l.async_set_effect(v), None, "mdi:animation-play"),
+    SelectDef("hw_effect", p.HW_EFFECTS, lambda l: l.hw_effect,
+              lambda l, v: l.async_set_hw_effect(v), None, "mdi:auto-fix"),
+    SelectDef("hw_layout", p.HW_LAYOUTS, lambda l: l.hw_layout,
+              lambda l, v: l.async_set_hw_layout(v), None, "mdi:table-column", True),
     SelectDef("loop_mode", p.LOOP_MODES, lambda l: l.loop_mode,
               lambda l, v: l.async_set_loop_mode(v), None, "mdi:repeat"),
 )
@@ -76,6 +81,8 @@ class CubeSelect(CubeEntity, SelectEntity, RestoreEntity):
         self._attr_icon = d.icon
         self._attr_options = list(d.options.values())
         self._by_name = {v: k for k, v in d.options.items()}
+        if d.config:
+            self._attr_entity_category = EntityCategory.CONFIG
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

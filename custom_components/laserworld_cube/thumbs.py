@@ -78,28 +78,56 @@ def render_pattern(flat: list[int] | None, size: int = 320, label: str | None = 
     return _png(im)
 
 
+# --- fixed sheet geometry: dashboards overlay tap zones on it, so it must never change size
+COLS, ROWS, CELL, GAP, HEAD = 5, 4, 150, 8, 40
+
+
+def sheet_size(cols: int = COLS, rows: int = ROWS, cell: int = CELL, gap: int = GAP,
+               head: int = HEAD) -> tuple[int, int]:
+    return cols * cell + (cols + 1) * gap, head + rows * cell + (rows + 1) * gap
+
+
+def tile_origin(i: int, cols: int = COLS, cell: int = CELL, gap: int = GAP,
+                head: int = HEAD) -> tuple[int, int]:
+    r, c = divmod(i, cols)
+    return gap + c * (cell + gap), head + gap + r * (cell + gap)
+
+
+def nav_centers(width: int, head: int = HEAD) -> dict[str, tuple[int, int]]:
+    """Centres of the drawn page controls in the header: previous, page label, next."""
+    y = head // 2
+    return {"previous": (width - 104, y), "label": (width - 62, y), "next": (width - 20, y)}
+
+
 def render_sheet(items: list[tuple[int, list[int] | None]], current: int | None, *,
-                 cols: int = 5, cell: int = 150, title: str | None = None) -> bytes:
+                 cols: int = COLS, rows: int = ROWS, cell: int = CELL, title: str | None = None,
+                 page: int | None = None, pages: int | None = None) -> bytes:
     """Grid of numbered thumbnails like the official app's library page.
 
     ``items`` is ``[(pattern_number, flat_points_or_None)]``; the tile for
-    ``current`` gets the app's blue selection border.
+    ``current`` gets the app's blue selection border. The image always has
+    ``rows`` rows (so its size is constant, even on a half-empty last page) and,
+    when ``pages`` > 1, previous/next arrows and a page counter in the header.
     """
-    rows = max(1, -(-len(items) // cols))
-    gap = 8
-    head = 34 if title else 0
-    w = cols * cell + (cols + 1) * gap
-    h = head + rows * cell + (rows + 1) * gap
+    w, h = sheet_size(cols, rows, cell)
     im = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(im)
     if title:
-        d.text((gap + 2, 8), title, fill=TEXT, font=_font(18))
+        d.text((GAP + 2, 10), title, fill=TEXT, font=_font(18))
+    if pages and pages > 1 and page:
+        nav = nav_centers(w)
+        for name, direction in (("previous", -1), ("next", 1)):
+            cx, cy = nav[name]
+            d.rounded_rectangle([cx - 17, cy - 14, cx + 17, cy + 14], radius=6, fill=(38, 50, 66))
+            # flat edge on the far side, point towards the direction of travel (◀ previous, ▶ next)
+            d.polygon([(cx - direction * 6, cy - 8), (cx - direction * 6, cy + 8), (cx + direction * 7, cy)],
+                      fill=TEXT)
+        label = f"{page}/{pages}"
+        lw = d.textlength(label, font=_font(16)) if hasattr(d, "textlength") else 30
+        d.text((nav["label"][0] - lw / 2, nav["label"][1] - 9), label, fill=TEXT, font=_font(16))
     font = _font(max(12, cell // 9))
-    for i, (num, flat) in enumerate(items):
-        r, c = divmod(i, cols)
-        x = gap + c * (cell + gap)
-        y = head + gap + r * (cell + gap)
-        # draw the tile at supersampled size, then paste
+    for i, (num, flat) in enumerate(items[: cols * rows]):
+        x, y = tile_origin(i, cols, cell)
         tile = Image.new("RGB", (cell * SS, cell * SS), TILE)
         if flat:
             _draw_pattern(ImageDraw.Draw(tile), flat, (0, 0, cell * SS, cell * SS), width=1.4 * SS)

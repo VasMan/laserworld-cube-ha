@@ -504,6 +504,7 @@ def test_text_color_size_and_rainbow():
     async def go():
         dev = FakeDevice()
         link = make_link(dev, idle_timeout=0)
+        link.text_color = 1                                      # (the default is Rainbow)
         await link.async_play_text("Hi")
         white = _decode_points(dev.realtime[-1][2])
         assert {c_ for *_, c_ in white} == {1}
@@ -689,5 +690,90 @@ def test_overview_paging():
         assert link.overview_page is None and link.current_overview_page() == 3
         await link.async_select_library(0)
         assert link.overview_pages() == 1
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_defaults_rainbow_text_and_raw_effect_service():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        assert link.text == "Alexandros" and link.text_color == 8           # Rainbow by default
+        await link.async_play_text()
+        assert len({c_ for *_, c_ in _decode_points(dev.realtime[-1][2])}) > 1
+        assert link.info.protocols == "1.0.1"
+        # an effect is sent BEFORE the text points, in the app's format
+        start = len(dev.received)
+        channels = [0, 0, 128, 0, 36, 40, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        await link.async_send_effect(channels, step=0, steps=1, duration=5)
+        order = [(f_, a) for f_, a, _ in dev.received[start:] if f_ == 2]
+        assert order[0] == (2, p.ACT_PLAY_EFFECT) and order[1] == (2, p.ACT_PLAY_START)
+        eff = next(d for f_, a, d in dev.received[start:] if (f_, a) == (2, p.ACT_PLAY_EFFECT))
+        assert eff == p.build_play_effect(0, 5000, channels, "1.0.1")
+        # it stays attached when the text is re-sent (e.g. colour change) ...
+        n = len(dev.received)
+        await link.async_set_text_color(2)
+        assert any((f_, a) == (2, p.ACT_PLAY_EFFECT) for f_, a, _ in dev.received[n:])
+        # ... and an empty list removes it again
+        n = len(dev.received)
+        await link.async_send_effect([])
+        assert not any((f_, a) == (2, p.ACT_PLAY_EFFECT) for f_, a, _ in dev.received[n:]) and link.text_effect is None
+        for bad in ([256], [-1], [0] * 65):
+            try:
+                await link.async_send_effect(bad); raise AssertionError(bad)
+            except c.CubeUserError:
+                assert link.connected
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_hardware_effect_is_sent_before_the_text_and_replayed():
+    async def go():
+        dev = FakeDevice()
+        dev.model["deviceSCEChannleTotal"] = 14                 # scene arrays cover CH3..CH16
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_hw_speed(100)
+        start = len(dev.received)
+        await link.async_set_hw_effect(1)                       # Rotate Z
+        seq = [(f_, a) for f_, a, _ in dev.received[start:] if f_ == 2]
+        assert seq[0] == (2, p.ACT_PLAY_EFFECT) and seq[1] == (2, p.ACT_PLAY_START)
+        data = next(d for f_, a, d in dev.received[start:] if (f_, a) == (2, p.ACT_PLAY_EFFECT))
+        assert data == p.build_play_effect(0, 3_000_000, p.hw_effect_channels(1, 100, 3), "1.0.1")
+        assert len(data) == 4 + 14 and data[4 + 6] == 228       # CH9 -> index 6 -> 128 + 100
+        assert link.hw_effect == 1 and link.text_active
+        # changing the speed re-sends effect + text
+        n = len(dev.received)
+        await link.async_set_hw_speed(20)
+        eff = next(d for f_, a, d in dev.received[n:] if (f_, a) == (2, p.ACT_PLAY_EFFECT))
+        assert eff[4 + 6] == 148
+        # explicit layout from CH1: 16 values and full intensity
+        n = len(dev.received)
+        await link.async_set_hw_layout(1)
+        eff = next(d for f_, a, d in dev.received[n:] if (f_, a) == (2, p.ACT_PLAY_EFFECT))
+        assert len(eff) == 4 + 16 and eff[4] == 255 and eff[4 + 8] == 148
+        # None removes it again
+        n = len(dev.received)
+        await link.async_set_hw_effect(0)
+        assert not any((f_, a) == (2, p.ACT_PLAY_EFFECT) for f_, a, _ in dev.received[n:]) and link.text_effect is None
+        # the raw service replaces a hardware effect
+        await link.async_set_hw_effect(4)
+        await link.async_send_effect([1, 2, 3])
+        assert link.hw_effect == 0 and link.text_effect["channels"] == [1, 2, 3]
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_hardware_effect_unsupported_layout_leaves_state_unchanged():
+    async def go():
+        dev = FakeDevice()
+        dev.model["deviceSCEChannleTotal"] = 36                 # a layout the 16CH chart cannot describe
+        link = make_link(dev, idle_timeout=0)
+        try:
+            await link.async_set_hw_effect(1); raise AssertionError("expected CubeUserError")
+        except c.CubeUserError as err:
+            assert "36" in str(err) and link.hw_effect == 0 and link.text_effect is None and link.connected
+        await link.async_set_hw_layout(3)                       # but an explicit layout works
+        await link.async_set_hw_effect(1)
+        assert link.hw_effect == 1
         await link.disconnect()
     asyncio.run(go())

@@ -53,22 +53,19 @@ and draw thumbnails like the official app's library page.
 Thumbnails are cached, so each library is only read once (use **Rebuild thumbnails** if you change the
 laser's content). While a build runs the integration keeps the Bluetooth link open, so close the phone app.
 
-Example dashboard card (your entity IDs may differ):
+### Pick patterns visually (dashboard card)
+Home Assistant's pop-up for an image can't contain buttons, so browsing happens on a dashboard card.
+`dashboard/library_browser.yaml` gives you a card where you can **tap any thumbnail to play it** and
+**tap the ◀ ▶ arrows drawn on the image to change page** – no leaving the view:
 
-```yaml
-type: vertical-stack
-cards:
-  - type: picture-entity
-    entity: image.laserworld_cube_847e_library_overview
-    show_name: false
-    show_state: false
-  - type: entities
-    entities:
-      - select.laserworld_cube_847e_pattern_library
-      - number.laserworld_cube_847e_pattern_number
-      - entity: button.laserworld_cube_847e_previous_pattern
-      - entity: button.laserworld_cube_847e_next_pattern
-```
+1. Dashboard → ⋮ → *Edit dashboard* → **Add card** → scroll to **Manual**.
+2. Paste the contents of `dashboard/library_browser.yaml` and save.
+3. If your entity IDs differ (they follow your device name), run
+   `python3 tools/make_dashboard.py your_device_slug` (e.g. `laserworld_cube_847e`) and paste again, or
+   just edit the entity IDs in the card.
+
+Underneath the card the same functions are available as services (`laserworld_cube.play_overview_tile`,
+`overview_next_page`, `overview_previous_page`), so you can also call them from scripts.
 
 ## Showing text
 Type into the **Text** entity (it starts as *Alexandros*; change it any time) and the laser displays
@@ -76,7 +73,7 @@ it immediately, like the app's *Text* page. **Play text** re-sends it, **Clear t
 
 | Control | What it does |
 |---|---|
-| Text color | White / Red / Yellow / Green / Cyan / Blue / Purple, **Rainbow** (one color per letter) or **Color flow** (white text recolored by the laser's flowing-color mode) |
+| Text color | **Rainbow** (one color per letter, the default) / White / Red / Yellow / Green / Cyan / Blue / Purple, or **Color flow** (white text recolored by the laser's flowing-color mode) |
 | Flow zones, Flow speed | The color-flow settings (the app's *LaserZones* / *FlowSpeed*); used by *Color flow* |
 | Text size | 10–100 % of the laser's frame |
 | Text orientation | Horizontal, or Vertical (letters stacked top to bottom) |
@@ -85,13 +82,61 @@ it immediately, like the app's *Text* page. **Play text** re-sends it, **Clear t
 
 Changing any of these while text is showing updates it right away. Multi-line text works too (`\n`).
 
-### Effects
+### Software effects
 The official app's text effects (Rotate, VBmove, …) are **downloaded from the manufacturer's cloud**
 and are not contained in the app, so they can't be copied exactly. Instead this integration provides
 its own motion effects, driven from Home Assistant by continuously updating the laser's *position*,
 *rotation* and *size*: **Scroll right / Scroll left / Bounce horizontal / Bounce vertical / Rotate /
 Pulse**. They work on text and on patterns. **Effect speed** goes from slow (30 s per cycle) to fast
 (1.5 s per cycle).
+
+### Hardware effects (smooth, run by the laser itself) – experimental
+Using Laserworld's *DMX chart CUBE series* (Standard mode 16CH) the integration can ask the laser to
+animate the text with its **built-in effect engine**, so the motion is perfectly smooth:
+
+| Hardware effect | DMX channel used |
+|---|---|
+| Rotate Z / X / Y | CH9 / CH10 / CH11 (speed range) |
+| Horizontal / Vertical movement | CH12 / CH13 (speed range) |
+| Zoom | CH14 (zoom speed range) |
+| X waves / Y waves | CH16 |
+| Color flow | CH5 (flow effects) + CH6 (color speed) – uses *Flow zones* / *Flow speed* |
+| Gradual drawing | CH5 + CH15 (text is drawn progressively) |
+
+Choose **Hardware effect** and set **Hardware effect speed** (1–127). It is sent exactly the way the
+official app sends its effects (effect values first, then the text).
+
+**One thing needs confirming on your laser: the *layout*.** The list of values the laser expects covers
+the last N of the 16 channels, and N is reported by the laser itself (*DMX channel counts* sensor, third
+number = scene channels; 14 means it starts at CH3, 16 means CH1). **Hardware effect layout** is
+*Automatic* by default and uses that number. If an effect does nothing or the text disappears:
+1. Pick **Rotate Z** and watch. 2. Switch **Hardware effect layout** (Configuration section) through
+*From CH1 … From CH5* – the right one makes the text spin. 3. Tell me which one worked and the sensor's
+numbers so Automatic can be fixed. Choose *None* to go back to normal text.
+
+### Why doesn't text move by itself like in the official app?
+I analysed the app: its text keeps moving because, for every text it plays, it first sends a list of
+**effect channel values** (a DMX-style list of up to a few dozen numbers) to the laser's built-in effect
+engine and *then* the text points. That is why plain points (what this integration sends) stay still.
+What each channel means (which one is flow speed, zones, direction…) is defined in the manufacturer's
+**cloud**, not in the app, so it can't be read from the app itself.
+
+This integration can already send exactly that command – the experimental **`laserworld_cube.send_effect`**
+service on the *Text* entity – so the mapping can be found by experiment (Developer tools → Actions):
+
+```yaml
+action: laserworld_cube.send_effect
+target:
+  entity_id: text.laserworld_cube_847e_text
+data:
+  channels: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]   # 16 values, 0-255
+  duration: 5
+```
+Change one value at a time and watch what the text does; an empty `channels: []` removes the effect again.
+The channel list stays attached to the text (like in the app), so changing color/size re-sends it.
+The app's own default text effect also uses *LaserZones*, *FlowSpeed* and a direction value that are
+not on the 16-channel chart; they most likely belong to the laser's **36-channel layout**. If you can
+share that chart (the other table in the same PDF) those can be added as well.
 
 Things to know:
 * Content never leaves the laser's field. Scroll/bounce need room to move, so reduce **Text size** (or
@@ -138,7 +183,9 @@ or changing *Scanning speed* is your responsibility.
 | Pattern preview, Library overview (images) | Thumbnails read from the laser (see above) |
 | Build / Rebuild / Cancel thumbnails (buttons), Thumbnail status (sensor) | Diagnostic |
 | Text, Text color / size / orientation / direction, Flow zones / speed, Play text / Clear text | Show text on the laser |
-| Effect, Effect speed | Motion effects (scroll, bounce, rotate, pulse) |
+| Software effect, Software effect speed | Stepwise motion effects driven from Home Assistant (scroll, bounce, rotate, pulse) |
+| Hardware effect, Hardware effect speed, Hardware effect layout | Smooth laser-side effects for text (rotate, move, zoom, waves, color flow, gradual drawing) |
+| DMX channel counts (sensor) | The laser's standard / professional / scene channel counts (diagnostic) |
 | Overview page, Overview previous / next page | Browse libraries with more than 20 patterns |
 | DMX address/mode, Functional mode, Scanning speed, Device size/position, Invert/Swap, Color setting, Master, Safety, … | Saved device settings (Configuration) |
 | Pattern color (select) | Original colors, White … Purple, Flowing (+ optional *Color flow*, *Color flow speed*) |

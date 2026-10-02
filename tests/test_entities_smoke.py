@@ -30,7 +30,8 @@ for m in ["homeassistant", "homeassistant.components", "homeassistant.components
           "homeassistant.helpers.entity", "homeassistant.helpers.restore_state",
           "bleak_retry_connector", "voluptuous", "homeassistant.components.text",
           "homeassistant.components.image", "homeassistant.components.sensor", "homeassistant.util",
-          "homeassistant.util.dt", "homeassistant.helpers.storage", "homeassistant.helpers.entity_registry"]:
+          "homeassistant.util.dt", "homeassistant.helpers.storage", "homeassistant.helpers.entity_registry",
+          "homeassistant.helpers.entity_platform"]:
     sys.modules[m] = _Stub(m)
 sys.modules["homeassistant"].components = sys.modules["homeassistant.components"]
 sys.modules["homeassistant.components"].bluetooth = sys.modules["homeassistant.components.bluetooth"]
@@ -247,5 +248,60 @@ def test_device_setting_entities_and_effect_controls():
         await pg.async_set_native_value(6)
         assert ov._signature() != sig5 and ov._page()[1:] == (101, 120)
         assert (await ov.async_image()).startswith(b"\x89PNG")
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_overview_tile_service_and_text_effect_service():
+    async def go():
+        dev = sim.FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        entry = _entry()
+        await link.async_connect()
+        async def _exec(fn):
+            return fn()
+        hass = types.SimpleNamespace(async_add_executor_job=_exec)
+        ov = mods["image"].CubeLibraryOverview(hass, link, entry); ov.hass = hass
+        await link.async_select_library(4)                       # Hotspot (128)
+        await link.async_set_overview_page(3)                    # patterns 41-60
+        await ov.async_play_tile(7)                              # 7th tile on this page = pattern 47
+        assert link.pattern_index == 47 and dev.frames[-1] == (5, 47)
+        await ov.async_page_next(); assert link.current_overview_page() == 4
+        await ov.async_page_previous(); assert link.current_overview_page() == 3
+        await link.async_set_overview_page(7)                    # last page has only 8 patterns (121-128)
+        await ov.async_play_tile(8); assert link.pattern_index == 128
+        try:
+            await ov.async_play_tile(9); raise AssertionError("expected HAError")
+        except HAError:
+            pass
+        # experimental effect service on the text entity
+        txt = mods["text"].CubeTextMessage(link, entry)
+        await txt.async_send_effect([0, 1, 2, 3], 0, 1, 2.5)
+        assert link.text_effect["channels"] == [0, 1, 2, 3] and link.text_active
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_hardware_effect_entities_and_dmx_sensor():
+    async def go():
+        dev = sim.FakeDevice()
+        dev.model["deviceSCEChannleTotal"] = 14
+        link = make_link(dev, idle_timeout=0)
+        entry = _entry()
+        await link.async_connect()
+        ctl = {d.key: mods["select"].CubeSelect(link, entry, d) for d in mods["select"].SELECTS}
+        assert ctl["hw_layout"].current_option == "Automatic" and ctl["hw_effect"].current_option == "None"
+        await ctl["hw_effect"].async_select_option("Vertical movement")
+        assert link.hw_effect == 5 and ctl["hw_effect"].current_option == "Vertical movement"
+        assert any((f_, a) == (2, sim.p.ACT_PLAY_EFFECT) for f_, a, _ in dev.received)
+        spd = mods["number"].CubeHwSpeed(link, entry)
+        await spd.async_set_native_value(10); assert spd.native_value == 10
+        await ctl["hw_layout"].async_select_option("From CH1 (16 values)")
+        assert link.hw_layout == 1
+        await ctl["hw_effect"].async_select_option("None")
+        dmx = mods["sensor"].CubeDmxChannels(link, entry)
+        assert dmx.native_value == "8 / 16 / 14"
+        await link.async_set_hw_layout(0)
+        assert dmx.extra_state_attributes["effect_array_starts_at_channel"] == 3
         await link.disconnect()
     asyncio.run(go())

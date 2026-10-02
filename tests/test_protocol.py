@@ -140,3 +140,58 @@ def test_device_model_write_payload_matches_app():
     names = {n for n, _ in p.DEVICE_MODEL_FIELDS}
     assert set(p.DEVICE_SETTING_LIMITS) <= names
     assert all(lo <= hi for lo, hi in p.DEVICE_SETTING_LIMITS.values())
+
+
+V4 = json.loads((HERE / "vectors4.json").read_text())
+
+
+def test_play_effect_payload_matches_app():
+    for v in V4:
+        # protocols >= 1.0.1: time unit is 50 ms, so units * 50 = duration
+        assert p.build_play_effect(v["index"], v["units"] * 50, v["values"], "1.0.1") == bytes(v["data"])
+    # older protocol: whole seconds
+    assert p.build_play_effect(0, 5000, [1], "1.0.0") == bytes([0, 0, 0, 5, 1])
+    try:
+        p.build_play_effect(0, 100, [256], "1.0.1")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_hardware_effect_channels_follow_the_dmx_chart():
+    # array starting at CH3 (14 values): index = channel - 3
+    a = p.hw_effect_channels(1, 60, 3)                     # Rotate Z at speed 60
+    assert len(a) == 14 and a[9 - 3] == 128 + 60 and a[5 - 3] == 2 and a.count(0) == 12
+    # starting at CH1 (16 values): intensity (CH1) is full, index = channel - 1
+    b = p.hw_effect_channels(1, 60, 1)
+    assert len(b) == 16 and b[0] == 255 and b[8] == 188 and b[4] == 2
+    for effect, ch in ((2, 10), (3, 11), (4, 12), (5, 13), (6, 14)):    # rotate X/Y, H/V movement, zoom
+        assert p.hw_effect_channels(effect, 100, 1)[ch - 1] == 228
+    assert p.hw_effect_channels(7, 50, 1)[15] == 50                    # X waves: lower half of CH16
+    assert p.hw_effect_channels(8, 50, 1)[15] == 178                   # Y waves: upper half
+    flow = p.hw_effect_channels(9, 0, 1, flow_zones=40, flow_speed=36)
+    assert flow[4] == 160 and flow[5] == 72                            # CH5 flow effect step, CH6 clockwise speed
+    assert p.hw_effect_channels(9, 0, 1, flow_zones=40, flow_speed=36, reverse=True)[5] == 200   # counter-clockwise
+    assert 44 <= p.hw_effect_channels(9, 0, 1, flow_zones=63)[4] <= 239
+    draw = p.hw_effect_channels(10, 100, 3)
+    assert draw[5 - 3] == 248 and draw[15 - 3] == 200                  # gradual drawing + its speed
+    # speed is clamped, invalid effects and impossible layouts are refused
+    assert p.hw_effect_channels(1, 999, 3)[6] == 255 and p.hw_effect_channels(1, -5, 3)[6] == 129
+    for bad in (lambda: p.hw_effect_channels(0, 5, 3), lambda: p.hw_effect_channels(42, 5, 3),
+                lambda: p.hw_effect_channels(1, 5, 12)):
+        try:
+            bad(); raise AssertionError("expected an error")
+        except (ValueError, p.ProtocolError):
+            pass
+
+
+def test_effect_layout_is_derived_from_the_scene_channel_count():
+    assert p.effect_layout_base(0, 14) == 3 and p.effect_layout_base(0, 16) == 1
+    assert p.effect_layout_base(0, 12) == 5 and p.effect_layout_base(0, None) == 3
+    assert p.effect_layout_base(0, 0) == 3
+    assert p.effect_layout_base(1, 14) == 1                              # an explicit choice wins
+    for n in (36, 10, 40):
+        try:
+            p.effect_layout_base(0, n); raise AssertionError(n)
+        except p.ProtocolError:
+            pass

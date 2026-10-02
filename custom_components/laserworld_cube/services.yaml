@@ -1,0 +1,61 @@
+play_overview_tile:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: image
+  fields:
+    tile:
+      required: true
+      example: 7
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+
+overview_next_page:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: image
+
+overview_previous_page:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: image
+
+send_effect:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: text
+  fields:
+    channels:
+      required: true
+      example: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+      selector:
+        object:
+    step:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    steps:
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: box
+    duration:
+      default: 5
+      selector:
+        number:
+          min: 0.05
+          max: 3000
+          step: 0.05
+          unit_of_measurement: s
+          mode: box

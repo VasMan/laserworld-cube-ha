@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from homeassistant.components.image import ImageEntity
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_platform
 from homeassistant.util import dt as dt_util
+import voluptuous as vol
 
 from . import protocol, thumbs
 from .entity import CubeEntity
@@ -13,6 +16,14 @@ PAGE = protocol.OVERVIEW_PAGE  # patterns per overview sheet (5 x 4)
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
     async_add_entities([CubePatternPreview(hass, link, entry), CubeLibraryOverview(hass, link, entry)])
+    # services used by dashboard cards (see dashboard/library_browser.yaml)
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        "play_overview_tile",
+        {vol.Required("tile"): vol.All(vol.Coerce(int), vol.Range(min=1, max=PAGE))},
+        "async_play_tile")
+    platform.async_register_entity_service("overview_next_page", {}, "async_page_next")
+    platform.async_register_entity_service("overview_previous_page", {}, "async_page_previous")
 
 
 class _CubeImage(CubeEntity, ImageEntity):
@@ -92,6 +103,21 @@ class CubeLibraryOverview(_CubeImage):
         items = [(n, self.link.get_thumb(lib, n)) for n in range(a, b + 1)]
         missing = sum(1 for _, f in items if f is None)
         pages = self.link.overview_pages()
-        title = (f"{lib.name}  {a}-{b} of {lib.size}   (page {self.link.current_overview_page()}/{pages})"
-                 + ("   - press 'Build thumbnails'" if missing == len(items) else ""))
-        return thumbs.render_sheet(items, self.link.pattern_index, title=title)
+        title = f"{lib.name}  {a}-{b} of {lib.size}" + (
+            "   - press 'Build thumbnails'" if missing == len(items) else "")
+        return thumbs.render_sheet(items, self.link.pattern_index, title=title,
+                                   page=self.link.current_overview_page(), pages=pages)
+
+    async def async_play_tile(self, tile: int) -> None:
+        """Play the pattern shown in tile ``tile`` (1..20) of the current page."""
+        lib, a, b = self._page()
+        n = a + tile - 1
+        if lib is None or n > b:
+            raise HomeAssistantError("There is no pattern in that slot")
+        await self.call(self.link.async_play_index(n))
+
+    async def async_page_next(self) -> None:
+        await self.call(self.link.async_overview_step(1))
+
+    async def async_page_previous(self) -> None:
+        await self.call(self.link.async_overview_step(-1))

@@ -52,6 +52,7 @@ ACT_SET_RUN_PARAMETERS = 12
 ACT_GET_DEVICE_BIND_INFO = 25
 ACT_FRAME_PLAYING = 5  # under FUNC_PATTERN_LIBRARY: [page, file]
 ACT_PLAY_START = 2     # under FUNC_REAL_TIME_PLAY: stream frames (text, drawings)
+ACT_PLAY_EFFECT = 3    # under FUNC_REAL_TIME_PLAY: effect channel values for the shown frame
 ACT_CLEAR_PLAY_DATA = 6  # under FUNC_REAL_TIME_PLAY
 
 # third byte of ENABLE_LASER_OUTPUT
@@ -92,6 +93,16 @@ EFFECTS = {0: "None", 1: "Scroll right", 2: "Scroll left", 3: "Bounce horizontal
            4: "Bounce vertical", 5: "Rotate", 6: "Pulse"}
 
 OVERVIEW_PAGE = 20  # thumbnails per overview sheet (5 x 4)
+
+# Hardware (laser-side) effects. Channel numbers follow Laserworld's "DMX chart CUBE series",
+# Standard mode 16CH: 5 colour, 6 colour speed, 9/10/11 rotate Z/X/Y, 12/13 horizontal/vertical
+# movement, 14 zoom, 15 gradual drawing, 16 X/Y waves. Speed channels use the upper half (128-255).
+HW_EFFECTS = {0: "None", 1: "Rotate Z", 2: "Rotate X", 3: "Rotate Y", 4: "Horizontal movement",
+              5: "Vertical movement", 6: "Zoom", 7: "X waves", 8: "Y waves", 9: "Color flow",
+              10: "Gradual drawing"}
+# which channel of the 16 the effect array starts at (0 = work it out from the laser)
+HW_LAYOUTS = {0: "Automatic", 1: "From CH1 (16 values)", 2: "From CH2 (15 values)",
+              3: "From CH3 (14 values)", 4: "From CH4 (13 values)", 5: "From CH5 (12 values)"}
 
 # persistent device settings ("Laser device settings" in the app)
 FUNCTION_MODES = {0: "DMX512 mode", 1: "Auto mode", 2: "Music mode", 3: "ILDA mode"}
@@ -376,6 +387,20 @@ def build_device_model(model: dict[str, int]) -> bytes:
     return out
 
 
+def build_play_effect(index: int, duration_ms: int, channels: list[int] | bytes,
+                      protocols: str = "") -> bytes:
+    """Payload of REAL_TIME_PLAY/PLAY_EFFECT: ``[0, step index, time(2), channel values...]``.
+
+    The time unit is 50 ms for protocol >= 1.0.1, otherwise whole seconds (like the app).
+    """
+    channels = bytes(channels)
+    if any(v < 0 or v > 255 for v in channels):
+        raise ValueError("channel values must be 0-255")
+    modern = version_tuple(protocols or "0") >= (1, 0, 1)
+    units = round(duration_ms / 50) if modern else duration_ms // 1000
+    return bytes([0, index]) + _be(units, 2) + channels
+
+
 def build_frame_play(page: int, file: int) -> bytes:
     """Payload of PATTERN_LIBRARY/FRAME_PLAYING."""
     return bytes([page, file])
@@ -448,6 +473,7 @@ class HandshakeInfo:
     product_key: str = ""
     maker_key: int = 0
     app_company: str = ""
+    protocols: str = ""
     extras: dict = field(default_factory=dict)
 
 
@@ -479,6 +505,7 @@ def parse_handshake_response(msg: bytes) -> HandshakeInfo:
     info.maker_key = int.from_bytes(msg[113:117], "big")
     if msg[122] > 0 and len(msg) >= 155:
         info.app_company = _text(msg[139:155])
+        info.protocols = _ver(msg[155:158]) if len(msg) >= 158 else ""
     return info
 
 
@@ -741,3 +768,54 @@ def parse_effect_step(message: bytes) -> dict[str, int]:
     return {"page": message[7], "step_total": message[8], "step_start": message[9],
             "channels": message[10], "play_ms": 50 * message[11], "sub_steps": message[12],
             "pattern_lib": message[13], "pattern_index": message[14]}
+
+
+# ------------------------------------------------------------ hardware effects
+
+def effect_layout_base(layout: int, scene_channels: int | None) -> int:
+    """First DMX channel (1-5) that the effect value array starts at.
+
+    ``layout`` 0 = decide from the laser's own scene-channel count: an array of N
+    values covers the last N of the 16 channels, so it starts at channel 17 - N.
+    """
+    if layout:
+        return layout
+    if not scene_channels:
+        return 3          # unknown: assume it starts at the pattern group, like library effect steps
+    base = 17 - scene_channels
+    if not 1 <= base <= 5:
+        raise ProtocolError(
+            f"the laser reports {scene_channels} effect channels; only layouts of 12-16 "
+            "channels (16CH chart) are known")
+    return base
+
+
+def hw_effect_channels(effect: int, speed: int, base: int, *, flow_zones: int = 40,
+                       flow_speed: int = 36, reverse: bool = False) -> list[int]:
+    """Effect value array (channels ``base``..16) for a hardware effect.
+
+    Unused channels are 0 (the app pads with zeros too). Colour is set to
+    "original" and intensity (if part of the array) to full so nothing blacks out.
+    """
+    if effect not in HW_EFFECTS or effect == 0:
+        raise ValueError("invalid hardware effect")
+    speed = min(127, max(1, int(speed)))
+    ch: dict[int, int] = {1: 255, 5: 2}
+    if effect in (1, 2, 3, 4, 5, 6):
+        ch[{1: 9, 2: 10, 3: 11, 4: 12, 5: 13, 6: 14}[effect]] = 128 + speed
+    elif effect == 7:
+        ch[16] = speed                       # X wave speed 1-127
+    elif effect == 8:
+        ch[16] = 128 + speed                 # Y wave speed 128-255
+    elif effect == 9:
+        v = max(44, min(236, 4 * int(flow_zones)))
+        ch[5] = v - (v - 44) % 4             # one of the "multiple flow effects", 4 values per step
+        ch[6] = (128 if reverse else 0) + max(4, min(127, 2 * int(flow_speed)))
+    elif effect == 10:
+        ch[5] = 248                          # gradual drawing effect
+        ch[15] = min(255, 2 * speed)
+    needed = [c for c in ch if c != 1 and (c != 5 or effect in (9, 10))]
+    if min(needed) < base:
+        raise ProtocolError(
+            f"{HW_EFFECTS[effect]} needs channel {min(needed)}, but the effect layout starts at channel {base}")
+    return [ch.get(c, 0) for c in range(base, 17)]

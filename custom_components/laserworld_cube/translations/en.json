@@ -86,7 +86,7 @@
         "name": "Text direction"
       },
       "effect": {
-        "name": "Effect"
+        "name": "Software effect"
       },
       "dmx_mode": {
         "name": "DMX mode"
@@ -102,6 +102,12 @@
       },
       "laser_type": {
         "name": "Laser type"
+      },
+      "hw_effect": {
+        "name": "Hardware effect"
+      },
+      "hw_layout": {
+        "name": "Hardware effect layout"
       }
     },
     "number": {
@@ -142,7 +148,7 @@
         "name": "Flow speed"
       },
       "effect_speed": {
-        "name": "Effect speed"
+        "name": "Software effect speed"
       },
       "overview_page": {
         "name": "Overview page"
@@ -170,6 +176,9 @@
       },
       "blue_max": {
         "name": "Blue maximum"
+      },
+      "hw_speed": {
+        "name": "Hardware effect speed"
       }
     },
     "button": {
@@ -232,6 +241,51 @@
     "sensor": {
       "thumbnail_status": {
         "name": "Thumbnail status"
+      },
+      "dmx_channels": {
+        "name": "DMX channel counts"
+      }
+    }
+  },
+  "services": {
+    "play_overview_tile": {
+      "name": "Play overview tile",
+      "description": "Play the pattern shown in a tile of the library overview image.",
+      "fields": {
+        "tile": {
+          "name": "Tile",
+          "description": "Tile number 1-20, counted left to right, top to bottom."
+        }
+      }
+    },
+    "overview_next_page": {
+      "name": "Overview next page",
+      "description": "Show the next page of the library overview image."
+    },
+    "overview_previous_page": {
+      "name": "Overview previous page",
+      "description": "Show the previous page of the library overview image."
+    },
+    "send_effect": {
+      "name": "Send effect channels (experimental)",
+      "description": "Send raw effect channel values to the laser together with the text, like the official app does. An empty list removes the effect.",
+      "fields": {
+        "channels": {
+          "name": "Channels",
+          "description": "List of channel values (0-255)."
+        },
+        "step": {
+          "name": "Step",
+          "description": "Effect step index."
+        },
+        "steps": {
+          "name": "Steps",
+          "description": "Total number of steps."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Step duration in seconds."
+        }
       }
     }
   }

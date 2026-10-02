@@ -42,6 +42,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         CubeFlowNumber(link, entry, "flow_speed", "mdi:speedometer-medium",
                        lambda l: l.run_params["runParaColorSpeed"], lambda l, v: l.async_set_flow(speed=v)),
         CubeEffectSpeed(link, entry),
+        CubeHwSpeed(link, entry),
         CubeOverviewPage(link, entry),
         *(CubeSettingNumber(link, entry, d) for d in SETTING_NUMBERS),
     ])
@@ -243,3 +244,23 @@ class CubeSettingNumber(CubeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.call(self.link.async_set_device_settings(**{self._d.field: int(value)}))
+
+
+class CubeHwSpeed(CubeEntity, NumberEntity):
+    """Speed of the hardware effect (1 = slowest, 127 = fastest)."""
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_step = 1
+    _attr_native_min_value = 1
+    _attr_native_max_value = 127
+    _attr_translation_key = "hw_speed"
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "hw_speed")
+
+    @property
+    def native_value(self) -> float:
+        return self.link.hw_speed
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self.link.async_set_hw_speed(value))

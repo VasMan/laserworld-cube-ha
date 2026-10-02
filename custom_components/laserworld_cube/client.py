@@ -91,11 +91,17 @@ class CubeLink:
         self._thumb_task: asyncio.Task | None = None
         # text
         self.text = "Alexandros"
-        self.text_color = 1
+        self.text_color = 8                # Rainbow
         self.text_size = 100
         self.text_active = False
         self.text_orientation = 0
         self.text_reverse = False
+        # raw effect channel values sent with the text (experimental, see send_effect service)
+        self.text_effect: dict | None = None
+        # hardware (laser-side) effect applied to the text
+        self.hw_effect = 0
+        self.hw_speed = 60
+        self.hw_layout = 0
         self.text_flow_set = False          # we switched the laser's colour flow on for text
         self._text_box: tuple[float, float] | None = None
         # motion effects driven from here (position / rotation / size of the output)
@@ -717,7 +723,7 @@ class CubeLink:
         if not message.strip():
             raise CubeUserError("Enter some text first")
 
-        async def op() -> None:
+        async def op() -> dict[str, int] | None:
             fmt = self.info.data_format
             if fmt not in (3, 4):
                 raise CubeUserError(
@@ -728,13 +734,21 @@ class CubeLink:
             if count > limit:
                 raise CubeUserError(f"Text too long ({count} points, the laser accepts {limit})")
             data = p.encode_frames(frames, fmt)
-            packets = p.split_transfer(p.FUNC_REAL_TIME_PLAY, p.ACT_PLAY_START, data,
-                                       self.info.buffer_max or 244, data_format=fmt,
-                                       layers=len(frames), frame=0)
+            buffer_max = self.info.buffer_max or 244
+            packets = p.split_transfer(p.FUNC_REAL_TIME_PLAY, p.ACT_PLAY_START, data, buffer_max,
+                                       data_format=fmt, layers=len(frames), frame=0)
             _LOGGER.debug("text %r: %d points, %d bytes, %d packets", message, count, len(data), len(packets))
             await self._transfer(p.FUNC_MY_DEVICE, p.ACT_ENABLE_LASER_OUTPUT,
                                  p.build_enable_payload(self.laser_on, p.RUN_MODE_APP,
                                                         p.PLAY_STATE_PLAY))
+            if self.text_effect:      # like the app: effect channel values first, then the points
+                eff = self.text_effect
+                payload = p.build_play_effect(eff["step"], int(eff["duration"] * 1000),
+                                              eff["channels"], self.info.protocols)
+                _LOGGER.debug("text effect: %s", payload.hex())
+                await self._transfer_stream(p.split_transfer(
+                    p.FUNC_REAL_TIME_PLAY, p.ACT_PLAY_EFFECT, payload, buffer_max,
+                    data_format=fmt, layers=0, frame=eff["steps"]))
             await self._transfer_stream(packets)
             # "Color flow" text uses the laser's colour-flow mode; leave it again otherwise
             if self.text_color == 9 or self.text_flow_set:
@@ -753,6 +767,25 @@ class CubeLink:
         self.text_active = True
         self._cancel_loop()
         self._notify()
+
+    async def async_send_effect(self, channels: list[int], step: int = 0, steps: int = 1,
+                                duration: float = 5.0) -> None:
+        """EXPERIMENTAL: attach raw effect channel values to the text.
+
+        The official app makes text move by sending these channel values (a
+        DMX-style list) to the laser's built-in effect engine before the text
+        points. Their meaning is defined by the manufacturer's cloud, so this lets
+        you experiment. An empty list removes the effect.
+        """
+        self.hw_effect = 0
+        if not channels:
+            self.text_effect = None
+        else:
+            if len(channels) > 64 or any(not 0 <= int(v) <= 255 for v in channels):
+                raise CubeUserError("channels must be at most 64 values, each 0-255")
+            self.text_effect = {"channels": [int(v) for v in channels], "step": int(step),
+                                "steps": max(1, int(steps)), "duration": max(0.05, float(duration))}
+        await self.async_play_text()
 
     async def async_clear_text(self) -> None:
         async def op() -> None:
@@ -954,3 +987,54 @@ class CubeLink:
                 self.effect = 0
                 self._arm_idle()
                 self._notify()
+
+    # -------------------------------------------------------- hardware effects
+    def effect_layout_base(self) -> int:
+        try:
+            return p.effect_layout_base(self.hw_layout, self.device_model.get("deviceSCEChannleTotal"))
+        except p.ProtocolError as err:
+            raise CubeUserError(str(err)) from err
+
+    def _apply_hw_effect(self) -> None:
+        if self.hw_effect == 0:
+            self.text_effect = None
+            return
+        try:
+            channels = p.hw_effect_channels(
+                self.hw_effect, self.hw_speed, self.effect_layout_base(),
+                flow_zones=self.flow_precision, flow_speed=self.run_params["runParaColorSpeed"])
+        except p.ProtocolError as err:
+            raise CubeUserError(str(err)) from err
+        # a long dwell so the single step keeps running (the time unit is 50 ms, max ~54 min)
+        self.text_effect = {"channels": channels, "step": 0, "steps": 1, "duration": 3000.0}
+
+    async def async_set_hw_effect(self, effect: int) -> None:
+        """Run a laser-side effect on the text (smooth, timed by the laser itself)."""
+        if effect not in p.HW_EFFECTS:
+            raise ValueError("invalid hardware effect")
+        if not self.settings_loaded:
+            await self.async_connect()        # the layout depends on the laser's channel counts
+        previous = (self.hw_effect, self.text_effect)
+        self.hw_effect = effect
+        try:
+            self._apply_hw_effect()
+            await self.async_play_text()
+        except Exception:
+            self.hw_effect, self.text_effect = previous
+            raise
+
+    async def async_set_hw_speed(self, speed: float) -> None:
+        self.hw_speed = int(min(127, max(1, speed)))
+        if self.hw_effect:
+            await self.async_set_hw_effect(self.hw_effect)
+        else:
+            self._notify()
+
+    async def async_set_hw_layout(self, layout: int) -> None:
+        if layout not in p.HW_LAYOUTS:
+            raise ValueError("invalid layout")
+        self.hw_layout = layout
+        if self.hw_effect:
+            await self.async_set_hw_effect(self.hw_effect)
+        else:
+            self._notify()
