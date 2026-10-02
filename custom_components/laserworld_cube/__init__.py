@@ -8,9 +8,11 @@ from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .client import CubeError, CubeLink
-from .const import (CONF_BLE_NAME, CONF_IDLE_TIMEOUT, CONF_USER_ID,
+from .const import (DOMAIN, CONF_BLE_NAME, CONF_IDLE_TIMEOUT, CONF_USER_ID,
                     DEFAULT_IDLE_TIMEOUT, DEFAULT_USER_ID)
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,6 +50,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> bool
 
     entry.async_create_background_task(hass, _initial_read(), f"{ble_name} initial read")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    device = dev_reg.async_get_device(identifiers={(DOMAIN, address)})
+    if device is not None:
+        # Safety net: make sure every entity of this entry hangs under the device
+        # (also repairs entries created by version 0.1.0).
+        for ent in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+            if ent.device_id != device.id:
+                _LOGGER.debug("linking %s to device", ent.entity_id)
+                ent_reg.async_update_entity(ent.entity_id, device_id=device.id)
+
+    def _sync_firmware() -> None:
+        fw = link.info.firmware_version
+        dev = dev_reg.async_get_device(identifiers={(DOMAIN, address)})
+        if dev is not None and fw and dev.sw_version != fw:
+            dev_reg.async_update_device(dev.id, sw_version=fw)
+
+    entry.async_on_unload(link.add_listener(_sync_firmware))
     entry.async_on_unload(entry.add_update_listener(_reload))
     return True
 

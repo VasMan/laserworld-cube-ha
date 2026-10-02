@@ -30,12 +30,13 @@ def s32(text):
 
 
 class FakeDevice:
-    def __init__(self, activate=1, bind_en=255, bind_user=0, fw=(2, 1, 0), drop_first=False):
+    def __init__(self, activate=1, bind_en=255, bind_user=0, fw=(2, 1, 0), drop_first=False, model_len=None):
         self.activate, self.bind_en, self.bind_user, self.fw = activate, bind_en, bind_user, fw
         self.device_key, self.device_secret, self.product_key = "DEVKEY-0123456789abcdef", "SECRET-9876543210fedcba", "PROD-KEY-1"
         self.keys = p.default_key_iv(NAME)
         self.received = []          # (function, action, data)
         self.drop_next = drop_first
+        self.model_len = model_len
         self.laser = None
         self.model = dict(deviceScannerRate=25, deviceSizeX=80, deviceSizeY=70, deviceSizeXY=0,
                           devicePositionX=100, devicePositionY=140, deviceInvertX=0, deviceInvertY=0,
@@ -77,7 +78,8 @@ class FakeDevice:
         if action == p.ACT_GET_DEVICE_BIND_INFO:
             rsp = self.data_rsp(bytes([self.bind_en]) + b"\x12\x34" + b"\x00" + self.bind_user.to_bytes(4, "big"))
         elif action == p.ACT_SEARCH_DEVICE_SET_MODEL:
-            rsp = self.data_rsp(b"".join(self.model[n].to_bytes(s, "big") for n, s in p.DEVICE_MODEL_FIELDS))
+            blob = b"".join(self.model[n].to_bytes(s, "big") for n, s in p.DEVICE_MODEL_FIELDS)
+            rsp = self.data_rsp(blob[:self.model_len] if self.model_len else blob)
         else:
             if action == p.ACT_ENABLE_LASER_OUTPUT:
                 self.laser = (data[0], data[1])
@@ -186,5 +188,40 @@ def test_idle_disconnect():
         assert not link.connected
         await link.async_set_laser(False)         # reconnects transparently
         assert link.state["connects"] == 2
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_short_settings_reply_like_real_device():
+    """Real V217 firmware sends fewer 'reserve' bytes than the app's struct."""
+    async def go():
+        dev = FakeDevice(model_len=38 + 10)          # only 10 of 96 reserve bytes
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_laser(True)
+        assert link.settings_loaded and link.run_params["runsizeX"] == 80
+        await link.disconnect()
+        # far too short (garbage) is still rejected, defaults kept
+        dev2 = FakeDevice(model_len=8)
+        link2 = make_link(dev2, idle_timeout=0)
+        await link2.async_set_laser(True)
+        assert not link2.settings_loaded and link2.run_params["runsizeX"] == 100
+        await link2.disconnect()
+    asyncio.run(go())
+
+
+def test_reconnect_does_not_overwrite_ha_values():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0.2)
+        await link.async_set_laser(True)
+        await link.async_set_params(runsizeX=33)
+        await asyncio.sleep(0.6)                      # idle disconnect
+        assert not link.connected
+        await link.async_set_params(runPositionX=7)   # reconnects
+        assert link.run_params["runsizeX"] == 33      # not reset to device's 80
+        sent = p.parse_fields(dev.received[-1][2], p.RUN_PARAM_FIELDS)
+        assert sent["runsizeX"] == 33 and sent["runPositionX"] == 7
+        await link.async_connect(refresh=True)        # explicit refresh re-reads
+        assert link.run_params["runsizeX"] == 80
         await link.disconnect()
     asyncio.run(go())

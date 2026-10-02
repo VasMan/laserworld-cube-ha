@@ -272,15 +272,27 @@ def parse_data_response(message: bytes) -> bytes:
     return message[7:]
 
 
-def parse_fields(payload: bytes, layout: tuple[tuple[str, int], ...]) -> dict[str, int]:
+def parse_fields(payload: bytes, layout: tuple[tuple[str, int], ...], *,
+                 required: str | None = None) -> dict[str, int]:
+    """Parse big-endian fields.
+
+    If ``required`` is given, parsing stops quietly at the first field that does
+    not fit (like the official app, which never validates length) and only fails
+    if ``required`` was not reached. Without it, short payloads raise.
+    """
     out: dict[str, int] = {}
     pos = 0
     for name, size in layout:
         chunk = payload[pos:pos + size]
         if len(chunk) < size:
-            raise ProtocolError(f"payload too short for {name}")
+            if required is None:
+                raise ProtocolError(f"payload too short for {name}")
+            break
         out[name] = int.from_bytes(chunk, "big")
         pos += size
+    if required is not None and required not in out:
+        raise ProtocolError(
+            f"payload too short: {len(payload)} bytes, needed up to {required}")
     return out
 
 

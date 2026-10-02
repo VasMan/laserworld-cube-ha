@@ -20,18 +20,14 @@ class CubeEntity(Entity):
     def __init__(self, link: CubeLink, entry, key: str) -> None:
         self.link = link
         self._attr_unique_id = f"{entry.data[CONF_ADDRESS]}_{key}"
-        self._address = entry.data[CONF_ADDRESS]
-        self._ble_name = entry.data[CONF_BLE_NAME]
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._address)},
-            connections={(dr.CONNECTION_BLUETOOTH, self._address)},
-            name=f"Cube Laser {self._ble_name}",
+        address = entry.data[CONF_ADDRESS]
+        parts = entry.data[CONF_BLE_NAME].split("_")
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=f"Laserworld Cube {parts[1] if len(parts) > 1 else parts[0]}",
             manufacturer="Laserworld",
             model="Cube Laser",
-            sw_version=self.link.info.firmware_version or None,
         )
 
     async def async_added_to_hass(self) -> None:

@@ -181,15 +181,22 @@ class CubeLink:
                 "Unbind it in the official app (Settings > Bind device) or enter "
                 "your account's user ID in this integration's options.")
 
-    async def _load_settings(self) -> None:
+    async def _load_settings(self, force: bool = False) -> None:
+        """Read device settings. Only once per session unless forced, so values
+        set from HA are not overwritten after an idle reconnect."""
+        if self.settings_loaded and not force:
+            return
         if p.version_tuple(self.info.communication_version) <= (1, 1, 6):
             return
+        resp = b""
         try:
             resp = await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SEARCH_DEVICE_SET_MODEL)
-            model = p.parse_fields(p.parse_data_response(resp), p.DEVICE_MODEL_FIELDS)
+            model = p.parse_fields(p.parse_data_response(resp), p.DEVICE_MODEL_FIELDS,
+                                   required="deviceAddress")
         except (p.ProtocolError, asyncio.TimeoutError) as err:
-            _LOGGER.warning("could not read device settings: %s", err)
+            _LOGGER.warning("could not read device settings: %s (raw reply: %s)", err, resp.hex())
             return
+        _LOGGER.debug("device settings: %s", {k: v for k, v in model.items() if k != "reserve"})
         self.device_model = model
         self._apply_model(model)
 
@@ -277,10 +284,10 @@ class CubeLink:
                     await self._drop()
             raise CubeError(f"communication failed: {last!r}") from last
 
-    async def async_connect(self) -> None:
-        """Connect and read settings (also used by the refresh button)."""
+    async def async_connect(self, refresh: bool = False) -> None:
+        """Connect and read settings; ``refresh`` forces a re-read from the device."""
         async def op() -> None:
-            await self._load_settings()
+            await self._load_settings(force=refresh)
         await self._run(op)
         self._notify()
 

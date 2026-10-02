@@ -21,7 +21,7 @@ class CubeRefreshButton(CubeEntity, ButtonEntity):
         super().__init__(link, entry, "read_settings")
 
     async def async_press(self) -> None:
-        await self.call(self.link.async_connect())
+        await self.call(self.link.async_connect(refresh=True))
 
 
 class CubeDisconnectButton(CubeEntity, ButtonEntity):
