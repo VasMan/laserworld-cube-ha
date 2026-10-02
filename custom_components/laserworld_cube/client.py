@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -64,6 +65,18 @@ class CubeLink:
         self.run_params: dict[str, int] = dict(p.DEFAULT_RUN_PARAMS)
         self.device_model: dict[str, int] = {}
         self.settings_loaded = False
+        # pattern libraries (read from the device catalog)
+        self.libraries: list[p.Library] = []
+        self.library_loaded = False
+        self.selected_library = 0
+        self.pattern_index = 1
+        self.play_state = p.PLAY_STATE_STOP
+        self.flow_precision = 8
+        # client-side looping (the official app times this itself)
+        self.loop_on = False
+        self.loop_mode = 0
+        self.loop_interval = 5.0
+        self._loop_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------ listeners
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -144,6 +157,7 @@ class CubeLink:
             await asyncio.sleep(HANDSHAKE_DELAY)
             await self._handshake()
             await self._load_settings()
+            await self._load_library()
         except BaseException:
             await self._drop()
             raise
@@ -223,6 +237,31 @@ class CubeLink:
         r["scannerRate"] = pick("deviceScannerRate", 15, 40, 30)
         self.settings_loaded = True
 
+    async def _load_library(self, force: bool = False) -> None:
+        """Read the device's pattern-library catalog (one page per request)."""
+        if self.library_loaded and not force:
+            return
+        entries: list[p.LibEntry] = []
+        try:
+            idx = 1
+            while idx <= 64:
+                resp = await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SEARCH_LIB_FILE, bytes([idx]))
+                total, entry = p.parse_lib_entry(resp)
+                entries.append(entry)
+                if total < idx + 1:
+                    break
+                idx += 1
+        except (p.ProtocolError, asyncio.TimeoutError) as err:
+            _LOGGER.warning("could not read pattern library catalog: %s", err)
+            return
+        _LOGGER.debug("library catalog: %s", entries)
+        self.libraries = p.build_libraries(entries)
+        self.library_loaded = True
+        if self.selected_library >= len(self.libraries):
+            self.selected_library = 0
+            self.pattern_index = 1
+        _LOGGER.debug("libraries: %s", [l.label for l in self.libraries])
+
     async def _drop(self) -> None:
         client, self._client = self._client, None
         self._keys = None
@@ -238,13 +277,14 @@ class CubeLink:
         if self._idle_handle:
             self._idle_handle.cancel()
             self._idle_handle = None
-        if self.idle_timeout > 0 and self._client is not None:
+        if self.idle_timeout > 0 and self._client is not None and not self.loop_on:
             loop = asyncio.get_running_loop()
             self._idle_handle = loop.call_later(
                 self.idle_timeout, lambda: loop.create_task(self.disconnect()))
 
     async def disconnect(self) -> None:
         """Politely close the link so the phone app can connect again."""
+        self._cancel_loop()
         if self._idle_handle:
             self._idle_handle.cancel()
             self._idle_handle = None
@@ -288,6 +328,7 @@ class CubeLink:
         """Connect and read settings; ``refresh`` forces a re-read from the device."""
         async def op() -> None:
             await self._load_settings(force=refresh)
+            await self._load_library(force=refresh)
         await self._run(op)
         self._notify()
 
@@ -297,6 +338,8 @@ class CubeLink:
                                  p.build_enable_payload(on, self.run_mode))
         await self._run(op)
         self.laser_on = on
+        if not on:
+            self._cancel_loop()
         self._notify()
 
     async def async_set_run_mode(self, mode: int) -> None:
@@ -324,3 +367,151 @@ class CubeLink:
         await self._run(op)
         self.run_params = new
         self._notify()
+
+    # ------------------------------------------------------- pattern playback
+    @property
+    def current_library(self) -> p.Library | None:
+        if 0 <= self.selected_library < len(self.libraries):
+            return self.libraries[self.selected_library]
+        return None
+
+    async def async_select_library(self, index: int) -> None:
+        """Choose which library the pattern number refers to (no Bluetooth)."""
+        if not 0 <= index < len(self.libraries):
+            raise ValueError("unknown library")
+        self.selected_library = index
+        self.pattern_index = 1
+        self._notify()
+
+    async def async_play_index(self, n: int | None = None) -> None:
+        """Play pattern ``n`` (1-based) of the selected library in APP mode."""
+        lib = self.current_library
+        if lib is None:
+            raise CubeError("No pattern libraries loaded yet - press 'Read settings'")
+        n = self.pattern_index if n is None else int(n)
+        page, file = lib.item(n)
+
+        async def op() -> None:
+            # like the app: switch to "playing" state, then send the frame
+            await self._transfer(p.FUNC_MY_DEVICE, p.ACT_ENABLE_LASER_OUTPUT,
+                                 p.build_enable_payload(self.laser_on, p.RUN_MODE_APP,
+                                                        p.PLAY_STATE_PLAY))
+            await self._transfer(p.FUNC_PATTERN_LIBRARY, p.ACT_FRAME_PLAYING,
+                                 p.build_frame_play(page, file))
+        await self._run(op)
+        self.run_mode = p.RUN_MODE_APP
+        self.play_state = p.PLAY_STATE_PLAY
+        self.pattern_index = n
+        self._notify()
+
+    async def async_step(self, delta: int) -> None:
+        lib = self.current_library
+        if lib is None:
+            raise CubeError("No pattern libraries loaded yet - press 'Read settings'")
+        n = (self.pattern_index - 1 + delta) % lib.size + 1
+        await self.async_play_index(n)
+
+    async def async_set_play_state(self, state: int) -> None:
+        async def op() -> None:
+            await self._transfer(p.FUNC_MY_DEVICE, p.ACT_ENABLE_LASER_OUTPUT,
+                                 p.build_enable_payload(self.laser_on, self.run_mode, state))
+        await self._run(op)
+        self.play_state = state
+        self._notify()
+
+    async def async_pause(self) -> None:
+        await self.async_set_play_state(p.PLAY_STATE_PAUSE)
+
+    async def async_stop(self) -> None:
+        self._cancel_loop()
+        await self.async_set_play_state(p.PLAY_STATE_STOP)
+
+    async def async_play(self) -> None:
+        """Resume if paused, otherwise (re)play the current pattern."""
+        if self.play_state == p.PLAY_STATE_PAUSE:
+            await self.async_set_play_state(p.PLAY_STATE_PLAY)
+        else:
+            await self.async_play_index()
+
+    async def async_set_pattern_color(self, index: int) -> None:
+        if index not in p.PATTERN_COLORS:
+            raise ValueError("invalid colour")
+        value = self.flow_precision if index == 8 else index
+        await self.async_set_params(runParaColorMode=value)
+
+    async def async_set_flow(self, precision: int | None = None, speed: int | None = None) -> None:
+        if precision is not None:
+            self.flow_precision = int(precision)
+        values: dict[str, int] = {}
+        if speed is not None:
+            values["runParaColorSpeed"] = int(speed)
+        if self.run_params["runParaColorMode"] >= 8 and precision is not None:
+            values["runParaColorMode"] = self.flow_precision
+        if values:
+            await self.async_set_params(**values)
+        else:
+            self._notify()
+
+    # ----------------------------------------------------------- loop playback
+    async def async_set_loop_mode(self, mode: int) -> None:
+        if mode not in p.LOOP_MODES:
+            raise ValueError("invalid loop mode")
+        self.loop_mode = mode
+        self._notify()
+
+    async def async_set_loop_interval(self, seconds: float) -> None:
+        self.loop_interval = max(1.0, float(seconds))
+        self._notify()
+
+    def _cancel_loop(self) -> None:
+        task, self._loop_task = self._loop_task, None
+        self.loop_on = False
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def async_set_loop(self, on: bool) -> None:
+        if not on:
+            self._cancel_loop()
+            self._notify()
+            return
+        if self.current_library is None:
+            raise CubeError("No pattern libraries loaded yet - press 'Read settings'")
+        if self._loop_task is not None:
+            return
+        self.loop_on = True
+        self._loop_task = asyncio.get_running_loop().create_task(self._loop_runner())
+        self._notify()
+
+    def _next_index(self, lib: p.Library) -> int | None:
+        n = self.pattern_index
+        if self.loop_mode == 0:
+            return n % lib.size + 1
+        if self.loop_mode == 1:
+            return random.randint(1, lib.size)
+        if self.loop_mode == 2:
+            return n + 1 if n < lib.size else None
+        return n  # single: repeat
+
+    async def _loop_runner(self) -> None:
+        me = asyncio.current_task()
+        try:
+            while self.loop_on:
+                lib = self.current_library
+                if lib is None:
+                    break
+                await self.async_play_index(self.pattern_index)
+                await asyncio.sleep(self.loop_interval)
+                nxt = self._next_index(lib)
+                if nxt is None:
+                    break
+                self.pattern_index = nxt
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("loop playback stopped: %s", err)
+        finally:
+            if self._loop_task is me:
+                self._loop_task = None
+                self.loop_on = False
+                self._arm_idle()
+                self._notify()

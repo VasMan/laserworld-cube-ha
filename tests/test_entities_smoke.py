@@ -38,8 +38,8 @@ sys.modules["homeassistant.helpers.device_registry"].CONNECTION_BLUETOOTH = "blu
 
 sys.modules["homeassistant.const"].Platform = types.SimpleNamespace(SWITCH="switch", SELECT="select", NUMBER="number", BUTTON="button")
 sys.modules["homeassistant.const"].EntityCategory = types.SimpleNamespace(DIAGNOSTIC="diagnostic")
-sys.modules["homeassistant.components.number"].NumberMode = types.SimpleNamespace(SLIDER="slider")
 sys.modules["homeassistant.const"].CONF_ADDRESS = "address"
+sys.modules["homeassistant.components.number"].NumberMode = types.SimpleNamespace(SLIDER="slider", BOX="box")
 class HAError(Exception): pass
 sys.modules["homeassistant.exceptions"].HomeAssistantError = HAError
 
@@ -96,5 +96,37 @@ def test_entities_drive_link():
             raise AssertionError("expected HAError")
         except HAError:
             pass
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_player_entities():
+    async def go():
+        dev = sim.FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        entry = _entry()
+        await link.async_connect()
+        lib = mods["select"].CubeLibrarySelect(link, entry)
+        assert lib.options[:2] == ["Timetunnel (8)", "Northlight (16)"] and lib.current_option == "Timetunnel (8)"
+        await lib.async_select_option("Hotspot (128)")
+        pat = mods["number"].CubePatternNumber(link, entry)
+        assert pat.native_max_value == 128 and pat.native_value == 1
+        await mods["switch"].CubeLaserSwitch(link, entry).async_turn_on()
+        await pat.async_set_native_value(65)                       # plays page 6 file 1
+        assert dev.frames[-1] == (6, 1) and dev.enables[-1] == bytes([1, 0, 0])
+        buttons = {k: mods["button"].CubePlayButton(link, entry, k, "i", a) for k, a in
+                   [("next", lambda l: l.async_step(1)), ("stop", lambda l: l.async_stop())]}
+        await buttons["next"].async_press()
+        assert dev.frames[-1] == (6, 2)
+        await buttons["stop"].async_press()
+        assert dev.enables[-1] == bytes([1, 0, 2])
+        sel = {d.key: mods["select"].CubeSelect(link, entry, d) for d in mods["select"].SELECTS}
+        await sel["pattern_color"].async_select_option("Red")
+        assert sel["pattern_color"].current_option == "Red"
+        await sel["loop_mode"].async_select_option("Random")
+        assert link.loop_mode == 1
+        sw = mods["switch"].CubeLoopSwitch(link, entry)
+        await sw.async_turn_on(); assert sw.is_on
+        await sw.async_turn_off(); assert not sw.is_on
         await link.disconnect()
     asyncio.run(go())

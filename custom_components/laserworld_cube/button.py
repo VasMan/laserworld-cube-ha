@@ -9,7 +9,27 @@ from .entity import CubeEntity
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
-    async_add_entities([CubeRefreshButton(link, entry), CubeDisconnectButton(link, entry)])
+    async_add_entities([
+        CubeRefreshButton(link, entry), CubeDisconnectButton(link, entry),
+        CubePlayButton(link, entry, "play", "mdi:play", lambda l: l.async_play()),
+        CubePlayButton(link, entry, "pause", "mdi:pause", lambda l: l.async_pause()),
+        CubePlayButton(link, entry, "stop", "mdi:stop", lambda l: l.async_stop()),
+        CubePlayButton(link, entry, "previous", "mdi:skip-previous", lambda l: l.async_step(-1)),
+        CubePlayButton(link, entry, "next", "mdi:skip-next", lambda l: l.async_step(1)),
+    ])
+
+
+class CubePlayButton(CubeEntity, ButtonEntity):
+    """Player controls for the selected pattern library."""
+
+    def __init__(self, link, entry, key: str, icon: str, action) -> None:
+        super().__init__(link, entry, key)
+        self._attr_translation_key = key
+        self._attr_icon = icon
+        self._action = action
+
+    async def async_press(self) -> None:
+        await self.call(self._action(self.link))
 
 
 class CubeRefreshButton(CubeEntity, ButtonEntity):

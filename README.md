@@ -23,25 +23,45 @@ Local Bluetooth control of Laserworld **Cube** lasers (the ones controlled by th
   HA disconnects after 30 s idle (configurable) so the phone can reconnect; the
   *Disconnect Bluetooth* button frees it immediately.
 
+## Playing the built-in patterns (APP mode)
+The laser only projects something in APP mode once it has been told *what* to play, like the
+Timetunnel / Northlight / Animation / Outdoors / Hotspot libraries in the official app.
+
+1. Turn **Laser output** on (it is an assumed state – see below).
+2. Pick a **Pattern library** (read from the laser's own catalog, with its pattern count).
+3. Set **Pattern number** – this plays that pattern immediately. Or use **Previous / Next pattern**.
+4. Optional: **Pattern color** (original colors, solid colors, or flowing), **Loop play** with
+   **Loop mode** (Loop / Random / Sequence / Single) and **Loop interval**.
+5. **Pause**, **Play** (resume) and **Stop** map to the laser's play states.
+
+Playing a pattern switches the laser to APP mode and respects the Laser output switch: if HA shows
+the laser as off, the pattern is sent but the laser stays off.
+
 ## Entities
 | Entity | Notes |
 |---|---|
 | Laser output (switch) | Assumed state – the device does not report it |
+| Pattern library (select) | From the laser's catalog, e.g. `Timetunnel (8)`, `Hotspot (128)` |
+| Pattern number (number) | Setting it plays that pattern |
+| Play / Pause / Stop / Previous / Next (buttons) | Player controls |
+| Loop play (switch), Loop mode, Loop interval | Cycling is timed by Home Assistant, like the phone app does |
+| Pattern color (select) | Original colors, White … Purple, Flowing (+ optional *Color flow*, *Color flow speed*) |
 | Run mode (select) | APP mode / DMX512 mode / ILDA mode |
 | APP work mode (select) | Automatic / Voice |
-| Color mode (select) | 12 modes (White … RGB … WYCP) |
+| Laser color mode (select) | The device's 12 color-function modes |
 | Auto speed, Voice sensitivity | 0–100 % |
-| Size X / Y | 10–100 % |
-| Position X / Y | 0–255 |
-| Rotation | 0–360 ° |
+| Size X / Y, Position X / Y, Rotation | Real-time parameters |
 | Read settings / Disconnect Bluetooth (buttons) | diagnostic |
 
-On connect, current size/position/speed/color settings are read from the laser. Laser on/off and
-run mode cannot be read back, so they are assumed.
+On connect, current size/position/speed settings and the pattern-library catalog are read from the
+laser. Laser on/off, run mode and play state cannot be read back, so they are assumed.
+
+**Per-pattern durations** (the "03.3" shown in the app) come from the app's cloud resources and are
+not stored in the laser, so Loop play uses one fixed interval instead.
 
 ## Not (yet) supported
-Pattern/scene library, playlists, text and drawing playback, DMX channel console, device setup
-(invert, scan rate persistence), activation, binding management.
+Playlists / *Offline play*, text and drawing playback, *Program* (custom effects), DMX channel
+console, device setup (invert, scan rate persistence), activation, binding management.
 
 ## Troubleshooting
 * Enable debug logs: `logger: logs: custom_components.laserworld_cube: debug`.

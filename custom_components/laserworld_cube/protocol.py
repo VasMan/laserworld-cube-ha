@@ -37,13 +37,21 @@ RSP_HANDSHAKE = 0x8B
 
 # functions / actions
 FUNC_MY_DEVICE = 1
+FUNC_PATTERN_LIBRARY = 3
 FUNC_DISCONNECT_DEVICE = 7
 ACT_DISCONNECT = 1
 ACT_DEVICE_SET_MODEL = 1
 ACT_ENABLE_LASER_OUTPUT = 5
+ACT_SEARCH_LIB_FILE = 10
 ACT_SEARCH_DEVICE_SET_MODEL = 11
 ACT_SET_RUN_PARAMETERS = 12
 ACT_GET_DEVICE_BIND_INFO = 25
+ACT_FRAME_PLAYING = 5  # under FUNC_PATTERN_LIBRARY: [page, file]
+
+# third byte of ENABLE_LASER_OUTPUT
+PLAY_STATE_PLAY = 0
+PLAY_STATE_PAUSE = 1
+PLAY_STATE_STOP = 2  # the device's default
 
 # run modes (value sent in ENABLE_LASER_OUTPUT)
 RUN_MODE_APP = 0
@@ -61,6 +69,30 @@ COLOR_MODES = {
 }
 
 BIND_NONE = 255
+
+# runParaColorMode: 0 = pattern's own colours, 1-7 solid colour, 8-63 flowing colour
+PATTERN_COLORS = {
+    0: "Original colors", 1: "White", 2: "Red", 3: "Yellow", 4: "Green",
+    5: "Cyan", 6: "Blue", 7: "Purple", 8: "Flowing",
+}
+# client-side play modes of the official app
+LOOP_MODES = {0: "Loop", 1: "Random", 2: "Sequence", 3: "Single"}
+
+# Library category ids reported by the device (filesNumber) -> app names
+LIBRARY_NAMES = {
+    1: "My pattern", 2: "Mixture", 3: "Animation", 4: "Northlight", 5: "Timetunnel",
+    6: "Outdoors", 7: "Hotspot", 8: "Circles", 9: "Lines", 10: "Polygon", 11: "Waves",
+    12: "Geometry", 13: "Highbeams", 14: "Highlight", 15: "Pointbeams", 16: "Dancers",
+    17: "Peoples", 18: "Holidays", 19: "Sports", 20: "Christmas", 21: "Chinese",
+    22: "Wedding", 23: "Textlogo", 24: "Numberclock", 25: "Ktv", 26: "Club",
+    27: "Party", 28: "Lives", 29: "Interaction", 30: "Advertising",
+}
+
+LIB_FIELDS: tuple[tuple[str, int], ...] = (
+    ("searchLibPageNumber", 1), ("searchLibFileNameKeyId", 4), ("searchLibDelete", 1),
+    ("searchLibSize", 4), ("searchLibStepTotal", 1), ("searchLibFileTotal", 1),
+    ("filesNumber", 1), ("filesMerge", 1), ("downloadPageMax", 1), ("reserve", 1),
+)
 
 KEY_TABLE = bytes((
     37, 94, 123, 97, 95, 87, 42, 48, 81, 85, 123, 93, 121, 63, 68, 67,
@@ -239,9 +271,16 @@ def build_handshake(user_id: int = 0, app_version: tuple[int, int, int] = (1, 0,
     return _frame(CMD_HANDSHAKE, payload)
 
 
-def build_enable_payload(laser_on: bool, run_mode: int) -> bytes:
-    """Payload of ENABLE_LASER_OUTPUT: [on/off, run mode]."""
-    return bytes([1 if laser_on else 0, run_mode])
+def build_enable_payload(laser_on: bool, run_mode: int,
+                         play_state: int | None = None) -> bytes:
+    """Payload of ENABLE_LASER_OUTPUT: [on/off, run mode(, play state)]."""
+    out = bytes([1 if laser_on else 0, run_mode])
+    return out if play_state is None else out + bytes([play_state])
+
+
+def build_frame_play(page: int, file: int) -> bytes:
+    """Payload of PATTERN_LIBRARY/FRAME_PLAYING."""
+    return bytes([page, file])
 
 
 def build_run_params(params: dict[str, int]) -> bytes:
@@ -350,3 +389,91 @@ def version_tuple(text: str) -> tuple[int, ...]:
         return tuple(int(p) for p in text.split("."))
     except ValueError:
         return (0,)
+
+
+# ------------------------------------------------------------- pattern libraries
+
+@dataclass(frozen=True)
+class LibEntry:
+    """One catalog page reported by SEARCH_LIB_FILE."""
+    page: int
+    delete: int
+    step_total: int
+    file_total: int
+    files_number: int
+    files_merge: int
+
+    @property
+    def is_effect(self) -> bool:
+        return bool(self.delete & 0x40)
+
+    @property
+    def is_download(self) -> bool:
+        return bool(self.delete & 0x10)
+
+    @property
+    def count(self) -> int:
+        return min(self.step_total if self.is_effect else self.file_total, 255)
+
+
+@dataclass
+class Library:
+    """A playable category (e.g. Timetunnel) made of one or more catalog pages."""
+    files_number: int
+    merge: int
+    effect_group: bool
+    name: str
+    pages: list[tuple[int, int]] = field(default_factory=list)  # (page, count)
+    label: str = ""
+
+    @property
+    def size(self) -> int:
+        return sum(c for _, c in self.pages)
+
+    def item(self, n: int) -> tuple[int, int]:
+        """Map pattern number n (1-based) to the device's (page, file)."""
+        if not 1 <= n <= self.size:
+            raise ValueError(f"pattern {n} out of range 1..{self.size}")
+        for page, count in self.pages:
+            if n <= count:
+                return page, n
+            n -= count
+        raise ValueError("unreachable")
+
+
+def parse_lib_entry(message: bytes) -> tuple[int, LibEntry]:
+    """Parse one SEARCH_LIB_FILE reply -> (total pages, entry)."""
+    payload = parse_data_response(message)
+    if not payload:
+        raise ProtocolError("empty library reply")
+    f = parse_fields(payload[1:], LIB_FIELDS, required="filesMerge")
+    return payload[0], LibEntry(
+        page=f["searchLibPageNumber"], delete=f["searchLibDelete"],
+        step_total=f["searchLibStepTotal"], file_total=f["searchLibFileTotal"],
+        files_number=f["filesNumber"], files_merge=f["filesMerge"])
+
+
+def build_libraries(entries: list[LibEntry]) -> list[Library]:
+    """Group catalog pages into libraries the way the official app does."""
+    groups: dict[tuple[bool, int, bool, int], Library] = {}
+    for e in entries:
+        name = LIBRARY_NAMES.get(e.files_number)
+        if e.count <= 0 or name is None:
+            continue
+        effect_group = e.is_effect or e.is_download
+        key = (effect_group, e.files_number, e.is_download, e.files_merge)
+        lib = groups.get(key)
+        if lib is None:
+            lib = groups[key] = Library(e.files_number, e.files_merge, effect_group, name)
+        lib.pages.append((e.page, e.count))
+    libs = sorted(groups.values(), key=lambda l: min(pg for pg, _ in l.pages))
+    base_counts: dict[str, int] = {}
+    for lib in libs:
+        lib.name = lib.name + (str(lib.merge) if lib.merge else "")
+        base_counts[lib.name] = base_counts.get(lib.name, 0) + 1
+    for lib in libs:
+        suffix = ""
+        if base_counts[lib.name] > 1:
+            suffix = " [effects]" if lib.effect_group else " [patterns]"
+        lib.label = f"{lib.name}{suffix} ({lib.size})"
+    return libs

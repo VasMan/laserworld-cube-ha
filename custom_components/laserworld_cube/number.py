@@ -31,7 +31,16 @@ NUMBERS = (
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
-    async_add_entities(CubeNumber(entry.runtime_data, entry, d) for d in NUMBERS)
+    link = entry.runtime_data
+    async_add_entities([
+        *(CubeNumber(link, entry, d) for d in NUMBERS),
+        CubePatternNumber(link, entry),
+        CubeLoopInterval(link, entry),
+        CubeFlowNumber(link, entry, "color_flow", "mdi:water",
+                       lambda l: l.flow_precision, lambda l, v: l.async_set_flow(precision=v)),
+        CubeFlowNumber(link, entry, "color_speed", "mdi:speedometer-medium",
+                       lambda l: l.run_params["runParaColorSpeed"], lambda l, v: l.async_set_flow(speed=v)),
+    ])
 
 
 class CubeNumber(CubeEntity, NumberEntity):
@@ -53,3 +62,69 @@ class CubeNumber(CubeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.call(self.link.async_set_params(**{self._d.field: int(value)}))
+
+
+class CubePatternNumber(CubeEntity, NumberEntity):
+    """Pattern number within the selected library. Setting it plays the pattern."""
+    _attr_mode = NumberMode.BOX
+    _attr_native_step = 1
+    _attr_native_min_value = 1
+    _attr_translation_key = "pattern"
+    _attr_icon = "mdi:numeric"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "pattern")
+
+    @property
+    def native_max_value(self) -> float:
+        lib = self.link.current_library
+        return float(lib.size) if lib else 1.0
+
+    @property
+    def native_value(self) -> float:
+        return self.link.pattern_index
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self.link.async_play_index(int(value)))
+
+
+class CubeLoopInterval(CubeEntity, NumberEntity):
+    _attr_mode = NumberMode.BOX
+    _attr_native_step = 1
+    _attr_native_min_value = 1
+    _attr_native_max_value = 3600
+    _attr_native_unit_of_measurement = "s"
+    _attr_translation_key = "loop_interval"
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "loop_interval")
+
+    @property
+    def native_value(self) -> float:
+        return self.link.loop_interval
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self.link.async_set_loop_interval(value))
+
+
+class CubeFlowNumber(CubeEntity, NumberEntity):
+    """Flowing-colour settings of the library page (disabled by default)."""
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_step = 1
+    _attr_native_min_value = 8
+    _attr_native_max_value = 63
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, link, entry, key: str, icon: str, getter, setter) -> None:
+        super().__init__(link, entry, key)
+        self._attr_translation_key = key
+        self._attr_icon = icon
+        self._get, self._set = getter, setter
+
+    @property
+    def native_value(self) -> float:
+        return self._get(self.link)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self._set(self.link, int(value)))

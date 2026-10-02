@@ -7,7 +7,8 @@ from .entity import CubeEntity
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
-    async_add_entities([CubeLaserSwitch(entry.runtime_data, entry)])
+    async_add_entities([CubeLaserSwitch(entry.runtime_data, entry),
+                        CubeLoopSwitch(entry.runtime_data, entry)])
 
 
 class CubeLaserSwitch(CubeEntity, SwitchEntity):
@@ -32,3 +33,26 @@ class CubeLaserSwitch(CubeEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.call(self.link.async_set_laser(False))
+
+
+class CubeLoopSwitch(CubeEntity, SwitchEntity):
+    """Cycle through the selected library from Home Assistant.
+
+    The official app also times this on the phone: the laser itself plays one
+    pattern until told otherwise.
+    """
+    _attr_translation_key = "loop_play"
+    _attr_icon = "mdi:play-box-multiple"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "loop_play")
+
+    @property
+    def is_on(self) -> bool:
+        return self.link.loop_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.call(self.link.async_set_loop(True))
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.call(self.link.async_set_loop(False))

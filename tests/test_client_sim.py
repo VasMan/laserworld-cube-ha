@@ -37,6 +37,12 @@ class FakeDevice:
         self.received = []          # (function, action, data)
         self.drop_next = drop_first
         self.model_len = model_len
+        self.frames = []            # (page, file) received via PATTERN_LIBRARY/FRAME_PLAYING
+        self.enables = []           # raw ENABLE_LASER_OUTPUT payloads
+        # (page, delete, step_total, file_total, files_number, merge)
+        self.catalog = [(1, 0x00, 0, 8, 5, 0), (2, 0x00, 0, 16, 4, 0), (3, 0x00, 0, 36, 3, 0),
+                        (4, 0x00, 0, 20, 6, 0), (5, 0x00, 0, 64, 7, 0), (6, 0x00, 0, 64, 7, 0),
+                        (7, 0x40, 10, 5, 2, 0)]
         self.laser = None
         self.model = dict(deviceScannerRate=25, deviceSizeX=80, deviceSizeY=70, deviceSizeXY=0,
                           devicePositionX=100, devicePositionY=140, deviceInvertX=0, deviceInvertY=0,
@@ -75,14 +81,23 @@ class FakeDevice:
         dlen = int.from_bytes(plain[9:13], "big")
         data = plain[47:47 + dlen]
         self.received.append((func, action, data))
-        if action == p.ACT_GET_DEVICE_BIND_INFO:
+        if func == 1 and action == p.ACT_SEARCH_LIB_FILE:
+            page, delete, step, files, num, merge = self.catalog[data[0] - 1]
+            entry = bytes([page]) + b"\x00\x00\x00\x2a" + bytes([delete]) + (1234).to_bytes(4, "big") \
+                + bytes([step, files, num, merge, 8, 0])
+            rsp = self.data_rsp(bytes([len(self.catalog)]) + entry)
+        elif func == 3 and action == p.ACT_FRAME_PLAYING:
+            self.frames.append((data[0], data[1]))
+            rsp = bytes([0x85, 0x12, 0x34, 0])
+        elif func == 1 and action == p.ACT_GET_DEVICE_BIND_INFO:
             rsp = self.data_rsp(bytes([self.bind_en]) + b"\x12\x34" + b"\x00" + self.bind_user.to_bytes(4, "big"))
         elif action == p.ACT_SEARCH_DEVICE_SET_MODEL:
             blob = b"".join(self.model[n].to_bytes(s, "big") for n, s in p.DEVICE_MODEL_FIELDS)
             rsp = self.data_rsp(blob[:self.model_len] if self.model_len else blob)
         else:
-            if action == p.ACT_ENABLE_LASER_OUTPUT:
+            if func == 1 and action == p.ACT_ENABLE_LASER_OUTPUT:
                 self.laser = (data[0], data[1])
+                self.enables.append(bytes(data))
             rsp = bytes([0x85, 0x12, 0x34, 0])
         return p.encrypt(rsp, *self.keys)
 
@@ -223,5 +238,101 @@ def test_reconnect_does_not_overwrite_ha_values():
         assert sent["runsizeX"] == 33 and sent["runPositionX"] == 7
         await link.async_connect(refresh=True)        # explicit refresh re-reads
         assert link.run_params["runsizeX"] == 80
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_libraries_built_from_device_catalog():
+    async def go():
+        link = make_link(FakeDevice(), idle_timeout=0)
+        await link.async_connect()
+        labels = [l.label for l in link.libraries]
+        assert labels == ["Timetunnel (8)", "Northlight (16)", "Animation (36)", "Outdoors (20)",
+                          "Hotspot (128)", "Mixture (10)"], labels   # two pages merged into Hotspot
+        hot = link.libraries[4]
+        assert hot.item(1) == (5, 1) and hot.item(64) == (5, 64) and hot.item(65) == (6, 1) and hot.item(128) == (6, 64)
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_play_pattern_sends_state_then_frame():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_laser(True)
+        await link.async_select_library(4)                  # Hotspot
+        await link.async_play_index(70)
+        assert dev.frames[-1] == (6, 6)
+        assert dev.enables[-1] == bytes([1, 0, 0])          # laser on, APP mode, state PLAY
+        await link.async_pause();  assert dev.enables[-1] == bytes([1, 0, 1])
+        await link.async_play();   assert dev.enables[-1] == bytes([1, 0, 0])   # resume only
+        n = len(dev.frames)
+        await link.async_stop();   assert dev.enables[-1] == bytes([1, 0, 2]) and len(dev.frames) == n
+        await link.async_play_index(128)
+        await link.async_step(1)                            # wraps to 1
+        assert dev.frames[-1] == (5, 1) and link.pattern_index == 1
+        await link.async_step(-1)                           # back to 128
+        assert dev.frames[-1] == (6, 64)
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_play_forces_app_mode_and_respects_laser_off():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_run_mode(p.RUN_MODE_ILDA)
+        await link.async_play_index(1)
+        assert dev.enables[-1] == bytes([0, 0, 0]) and link.run_mode == p.RUN_MODE_APP   # laser stays OFF
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_pattern_color_and_flow():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_pattern_color(3)
+        sent = p.parse_fields(dev.received[-1][2], p.RUN_PARAM_FIELDS)
+        assert sent["runParaColorMode"] == 3
+        await link.async_set_flow(precision=20)
+        await link.async_set_pattern_color(8)
+        assert p.parse_fields(dev.received[-1][2], p.RUN_PARAM_FIELDS)["runParaColorMode"] == 20
+        await link.async_set_flow(speed=40)
+        sent = p.parse_fields(dev.received[-1][2], p.RUN_PARAM_FIELDS)
+        assert sent["runParaColorSpeed"] == 40 and sent["runParaColorMode"] == 20
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_loop_modes():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0.1)               # idle timer must not interfere with the loop
+        await link.async_set_laser(True)
+        await link.async_select_library(0)                    # Timetunnel (8)
+        await link.async_set_loop_interval(1)
+        link.loop_interval = 0.05                             # speed up the test
+        await link.async_set_loop_mode(0)
+        await link.async_set_loop(True)
+        await asyncio.sleep(0.6)
+        assert link.loop_on and link.connected
+        seen = [f for f in dev.frames]
+        assert len(seen) >= 4 and seen[:4] == [(1, 1), (1, 2), (1, 3), (1, 4)], seen
+        await link.async_set_loop(False)
+        n = len(dev.frames); await asyncio.sleep(0.2); assert len(dev.frames) == n
+        # sequence mode stops at the end
+        await link.async_select_library(0); link.pattern_index = 6
+        await link.async_set_loop_mode(2); await link.async_set_loop(True)
+        await asyncio.sleep(0.5)
+        assert not link.loop_on and dev.frames[-1] == (1, 8)
+        # single mode repeats the same pattern
+        link.pattern_index = 3; await link.async_set_loop_mode(3); await link.async_set_loop(True)
+        await asyncio.sleep(0.4); await link.async_set_loop(False)
+        assert set(dev.frames[-3:]) == {(1, 3)}
+        # turning the laser off ends a loop
+        await link.async_set_loop_mode(1); await link.async_set_loop(True)
+        await link.async_set_laser(False)
+        assert not link.loop_on
         await link.disconnect()
     asyncio.run(go())
