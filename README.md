@@ -7,7 +7,7 @@ Local Bluetooth control of Laserworld **Cube** lasers (the ones controlled by th
 > Only automate it where that is safe (no one can be in the beam path, audience-scanning
 > rules, etc.). The laser switch is *never* restored to "on" after a restart.
 
-![Dashboard Preview](https://raw.githubusercontent.com/VasMan/laserworld-cube-ha/main/library-overview.png)
+![Dashboard Preview](https://github.com/VasMan/laserworld-cube-ha/blob/main/llibrary-overview.png)
 
 ## Install (HACS)
 1. Put this repo on GitHub as `VasMan/laserworld-cube-ha`.
