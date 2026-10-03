@@ -6,8 +6,22 @@ Local Bluetooth control of Laserworld **Cube** lasers (the ones controlled by th
 > ⚠️ **Laser safety.** This integration can switch laser output on from automations.
 > Only automate it where that is safe (no one can be in the beam path, audience-scanning
 > rules, etc.). The laser switch is *never* restored to "on" after a restart.
+ 
 
 ![Dashboard Preview](https://github.com/VasMan/laserworld-cube-ha/blob/main/llibrary-overview.png)
+
+Disclaimer
+
+Use this integration entirely at your own risk.
+
+- This is an unofficial, community project. It is not affiliated with, endorsed by or supported by Laserworld, Temei or Home Assistant. It was written by analysing the behaviour of the official app and may stop working at any time, for example after a laser firmware or app update.
+- It is provided "as is", without warranty of any kind, express or implied, including but not limited to fitness for a particular purpose, reliability or safety.
+- The author accepts no responsibility or liability for any damage, injury, loss or consequence of any kind arising from the installation or use of this integration. This includes, without limitation: damage to or malfunction of the laser or other equipment, loss of warranty, eye or skin injury, property damage, fire, legal or regulatory problems, and data loss.
+- Lasers can cause serious, permanent eye injury. You alone are responsible for operating the laser safely and lawfully, including keeping the beam away from people, aircraft, vehicles and animals, and complying with local laser-safety rules. Never rely on this software as a safety system. Automations, scripts, voice assistants and network access can turn laser output on – consider carefully who and what can control it.
+- Some entities change the laser's saved settings (for example scanning speed, color output limits, Safety and DMX settings). Wrong values can affect hardware or safety behavior. Change them only if you understand the effect; they are disabled by default for that reason.
+- You are responsible for complying with the terms of your laser, the official app and any applicable laws.
+
+If you do not agree with these terms, do not install or use this integration.
 
 ## Install (HACS)
 1. Put this repo on GitHub as `VasMan/laserworld-cube-ha`.
