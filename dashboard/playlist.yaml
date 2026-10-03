@@ -1,0 +1,20 @@
+# Playlist card for the Laserworld Cube integration.
+# Dashboard > Edit > Add card > Manual, then paste this.
+type: vertical-stack
+cards:
+  - type: picture-entity
+    entity: image.laserworld_cube_847e_playlist_overview
+    show_name: false
+    show_state: false
+  - type: entities
+    entities:
+      - select.laserworld_cube_847e_playlist
+      - switch.laserworld_cube_847e_play_playlist
+      - switch.laserworld_cube_847e_repeat_playlist
+      - number.laserworld_cube_847e_playlist_item_duration
+      - button.laserworld_cube_847e_add_to_playlist
+      - button.laserworld_cube_847e_remove_last_playlist_item
+      - button.laserworld_cube_847e_clear_playlist
+      - button.laserworld_cube_847e_new_playlist
+      - button.laserworld_cube_847e_delete_playlist
+      - sensor.laserworld_cube_847e_playlist_summary

@@ -305,3 +305,62 @@ def test_hardware_effect_entities_and_dmx_sensor():
         assert dmx.extra_state_attributes["effect_array_starts_at_channel"] == 3
         await link.disconnect()
     asyncio.run(go())
+
+
+def test_playlist_entities_services_and_persistence_hook():
+    async def go():
+        dev = sim.FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        entry = _entry()
+        await link.async_connect()
+        await link.async_select_library(4)                       # Hotspot (128)
+        sel = mods["select"].CubePlaylistSelect(link, entry)
+        assert sel.options == [] and sel.current_option is None
+        new = mods["button"].CubePlayButton(link, entry, "new_playlist", "i", lambda l: l.async_playlist_create())
+        add = mods["button"].CubePlayButton(link, entry, "add_to_playlist", "i", lambda l: l.async_playlist_add())
+        await new.async_press()
+        assert sel.options == ["Playlist 1"] and sel.current_option == "Playlist 1"
+        secs = mods["number"].CubePlaylistSeconds(link, entry)
+        await secs.async_set_native_value(7.5); assert secs.native_value == 7.5
+        await link.async_play_index(70)
+        await add.async_press()                                  # adds the current pattern for 7.5 s
+        assert link.current_playlist() == [{"lib": link.libraries[4].key, "name": "Hotspot", "n": 70, "seconds": 7.5}]
+        # services (on the playlist select) and the overview tile service
+        await sel.async_service_add("Animation", 12, 3, None, None)
+        await sel.async_service_set_duration(2, 20)
+        await sel.async_service_move(2, 1)
+        assert [(i["name"], i["n"], i["seconds"]) for i in link.current_playlist()] == [("Animation", 12, 20.0), ("Hotspot", 70, 7.5)]
+        await sel.async_service_remove(1)
+        async def _exec(fn):
+            return fn()
+        hass = types.SimpleNamespace(async_add_executor_job=_exec)
+        ov = mods["image"].CubeLibraryOverview(hass, link, entry); ov.hass = hass
+        await link.async_set_overview_page(3)
+        await ov.async_playlist_add_tile(7, 4)                   # tile 7 of page 3 = pattern 47, 4 s
+        assert link.current_playlist()[-1] == {"lib": link.libraries[4].key, "name": "Hotspot", "n": 47, "seconds": 4.0}
+        try:
+            await ov.async_playlist_add_tile(9 + 20); raise AssertionError("expected an error")
+        except Exception as err:
+            assert not isinstance(err, AssertionError)
+        # switches, sensor and image
+        play = mods["switch"].CubePlaylistSwitch(link, entry); rep = mods["switch"].CubePlaylistRepeat(link, entry)
+        assert rep.is_on and not play.is_on
+        await rep.async_turn_off(); assert not link.playlist_repeat
+        link.current_playlist()[0]["seconds"] = 0.05; link.current_playlist()[1]["seconds"] = 0.05
+        await play.async_turn_on(); assert play.is_on
+        await asyncio.sleep(0.4)
+        assert not play.is_on                                    # played once (repeat off) and stopped
+        sens = mods["sensor"].CubePlaylistSensor(link, entry)
+        assert sens.native_value.startswith("2 items") and sens.extra_state_attributes["items"][0]["library"] == "Hotspot"
+        pov = mods["image"].CubePlaylistOverview(hass, link, entry); pov.hass = hass
+        sig = pov._signature()
+        assert (await pov.async_image()).startswith(b"\x89PNG")
+        await link.async_playlist_add(library="Northlight", pattern=2)
+        assert pov._signature() != sig                            # the image refreshes when the list changes
+        for bad in (lambda: sel.async_service_remove(99), lambda: sel.async_service_add("Nope")):
+            try:
+                await bad(); raise AssertionError("expected HAError")
+            except HAError:
+                pass
+        await link.disconnect()
+    asyncio.run(go())

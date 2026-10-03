@@ -10,6 +10,7 @@ from .entity import CubeEntity
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
     async_add_entities([CubeLaserSwitch(link, entry), CubeLoopSwitch(link, entry),
+                        CubePlaylistSwitch(link, entry), CubePlaylistRepeat(link, entry),
                         *(CubeSettingSwitch(link, entry, *d) for d in SETTING_SWITCHES)])
 
 
@@ -91,3 +92,40 @@ class CubeSettingSwitch(CubeEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.call(self.link.async_set_device_settings(**{self._field: 0}))
+
+
+class CubePlaylistSwitch(CubeEntity, SwitchEntity):
+    """Play the active playlist: each pattern for its own time."""
+    _attr_translation_key = "play_playlist"
+    _attr_icon = "mdi:playlist-play"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "play_playlist")
+
+    @property
+    def is_on(self) -> bool:
+        return self.link.playlist_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.call(self.link.async_playlist_play())
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.call(self.link.async_playlist_stop())
+
+
+class CubePlaylistRepeat(CubeEntity, SwitchEntity):
+    _attr_translation_key = "repeat_playlist"
+    _attr_icon = "mdi:repeat"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "repeat_playlist")
+
+    @property
+    def is_on(self) -> bool:
+        return self.link.playlist_repeat
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.call(self.link.async_set_playlist_repeat(True))
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.call(self.link.async_set_playlist_repeat(False))

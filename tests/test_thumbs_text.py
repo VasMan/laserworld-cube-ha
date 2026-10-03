@@ -97,3 +97,21 @@ def test_dashboard_tap_zones_line_up_with_the_image():
     assert prev["top"] / 100 * h < th.HEAD                              # in the header strip
     # the shipped file is exactly what the generator produces
     assert (ROOT.parent.parent / "dashboard" / "library_browser.yaml").read_text() == mk.build("laserworld_cube_847e")
+
+
+def test_playlist_render_and_dashboard_files():
+    import importlib.util as iu, io
+    from PIL import Image
+    items = [{"label": "Hotspot 70", "seconds": 12.5, "flat": th.pack([(2, 4, 64, 0xFFFFFF), (200, 200, 0, 0xFF0000)])},
+             {"label": "A very long group name that must be trimmed 12", "seconds": 90, "flat": None}]
+    empty = Image.open(io.BytesIO(th.render_playlist([], None, title="t")))
+    two = Image.open(io.BytesIO(th.render_playlist(items, 1, title="t")))
+    many = Image.open(io.BytesIO(th.render_playlist(items * 25, None, title="t")))   # 50 items -> capped at 8 rows
+    assert empty.size[1] < two.size[1] + 200 and many.size[1] == th.sheet_size(rows=8)[1]
+    assert th._fmt_seconds(5) == "5s" and th._fmt_seconds(12.5) == "12.5s" and th._fmt_seconds(90) == "1m30s" and th._fmt_seconds(120) == "2m"
+    spec = iu.spec_from_file_location("mk2", ROOT.parent.parent / "tools" / "make_dashboard.py")
+    mk = iu.module_from_spec(spec); sys.modules["mk2"] = mk; spec.loader.exec_module(mk)
+    dash = ROOT.parent.parent / "dashboard"
+    assert (dash / "playlist.yaml").read_text() == mk.build_playlist("laserworld_cube_847e")
+    browser = (dash / "library_browser.yaml").read_text()
+    assert browser.count("hold_action:") == 20 and browser.count("playlist_add_tile") == 20   # long-press adds to the playlist

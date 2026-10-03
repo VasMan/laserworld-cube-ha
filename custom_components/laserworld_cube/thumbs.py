@@ -140,6 +140,54 @@ def render_sheet(items: list[tuple[int, list[int] | None]], current: int | None,
     return _png(im)
 
 
+def _fmt_seconds(sec: float) -> str:
+    sec = float(sec)
+    if sec < 60:
+        return f"{sec:g}s"
+    m, r = divmod(round(sec), 60)
+    return f"{m}m{r:02d}s" if r else f"{m}m"
+
+
+def render_playlist(items: list[dict], current: int | None, *, title: str,
+                    cols: int = COLS, cell: int = CELL, max_rows: int = 8) -> bytes:
+    """Overview of a playlist: numbered thumbnails with the group, pattern and on-time.
+
+    ``items`` is ``[{"label": "Hotspot 45", "seconds": 5.0, "flat": points_or_None}]``;
+    ``current`` (0-based) is highlighted while the playlist plays.
+    """
+    shown = items[: cols * max_rows]
+    rows = max(1, -(-len(shown) // cols))
+    w, h = sheet_size(cols, rows, cell)
+    im = Image.new("RGB", (w, h), BG)
+    d = ImageDraw.Draw(im)
+    d.text((GAP + 2, 10), title, fill=TEXT, font=_font(18))
+    if not shown:
+        d.text((GAP + 6, HEAD + 24), "The playlist is empty - add patterns with 'Add to playlist'.",
+               fill=(150, 160, 175), font=_font(16))
+    num_font, small = _font(max(12, cell // 9)), _font(max(11, cell // 12))
+    for i, it in enumerate(shown):
+        x, y = tile_origin(i, cols, cell)
+        tile = Image.new("RGB", (cell * SS, cell * SS), TILE)
+        if it.get("flat"):
+            _draw_pattern(ImageDraw.Draw(tile), it["flat"], (0, 0, cell * SS, cell * SS), width=1.4 * SS)
+        im.paste(tile.resize((cell, cell), Image.LANCZOS), (x, y))
+        d.text((x + 6, y + 4), str(i + 1), fill=TEXT, font=num_font)
+        band = 24
+        d.rectangle([x, y + cell - band, x + cell - 1, y + cell - 1], fill=(12, 17, 24))
+        secs = _fmt_seconds(it["seconds"])
+        sw = d.textlength(secs, font=small)
+        label = it["label"]
+        while label and d.textlength(label, font=small) > cell - sw - 18:
+            label = label[:-1]
+        d.text((x + 6, y + cell - band + 5), label, fill=TEXT, font=small)
+        d.text((x + cell - sw - 6, y + cell - band + 5), secs, fill=(160, 175, 255), font=small)
+        if current == i:
+            d.rectangle([x, y, x + cell - 1, y + cell - 1], outline=ACCENT, width=3)
+    if len(items) > len(shown):
+        d.text((w - 170, 12), f"+{len(items) - len(shown)} more", fill=(150, 160, 175), font=_font(14))
+    return _png(im)
+
+
 def _png(im: Image.Image) -> bytes:
     buf = io.BytesIO()
     im.save(buf, "PNG", optimize=True)

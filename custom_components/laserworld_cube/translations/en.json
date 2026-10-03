@@ -55,6 +55,12 @@
       },
       "swap_xy": {
         "name": "Swap X/Y"
+      },
+      "play_playlist": {
+        "name": "Play playlist"
+      },
+      "repeat_playlist": {
+        "name": "Repeat playlist"
       }
     },
     "select": {
@@ -108,6 +114,9 @@
       },
       "hw_layout": {
         "name": "Hardware effect layout"
+      },
+      "playlist": {
+        "name": "Playlist"
       }
     },
     "number": {
@@ -179,6 +188,9 @@
       },
       "hw_speed": {
         "name": "Hardware effect speed"
+      },
+      "playlist_seconds": {
+        "name": "Playlist item duration"
       }
     },
     "button": {
@@ -223,6 +235,21 @@
       },
       "overview_next": {
         "name": "Overview next page"
+      },
+      "new_playlist": {
+        "name": "New playlist"
+      },
+      "add_to_playlist": {
+        "name": "Add to playlist"
+      },
+      "remove_playlist_item": {
+        "name": "Remove last playlist item"
+      },
+      "clear_playlist": {
+        "name": "Clear playlist"
+      },
+      "delete_playlist": {
+        "name": "Delete playlist"
       }
     },
     "text": {
@@ -236,6 +263,9 @@
       },
       "library_overview": {
         "name": "Library overview"
+      },
+      "playlist_overview": {
+        "name": "Playlist overview"
       }
     },
     "sensor": {
@@ -244,6 +274,9 @@
       },
       "dmx_channels": {
         "name": "DMX channel counts"
+      },
+      "playlist_summary": {
+        "name": "Playlist summary"
       }
     }
   },
@@ -285,6 +318,96 @@
         "duration": {
           "name": "Duration",
           "description": "Step duration in seconds."
+        }
+      }
+    },
+    "playlist_add_tile": {
+      "name": "Add overview tile to playlist",
+      "description": "Add the pattern in a tile of the library overview image to the active playlist.",
+      "fields": {
+        "tile": {
+          "name": "Tile",
+          "description": "Tile number 1-20."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long the pattern stays on, in seconds."
+        }
+      }
+    },
+    "playlist_add": {
+      "name": "Add pattern to playlist",
+      "description": "Add a pattern from any library to a playlist.",
+      "fields": {
+        "library": {
+          "name": "Library",
+          "description": "Library name, e.g. Hotspot (default: the selected library)."
+        },
+        "pattern": {
+          "name": "Pattern",
+          "description": "Pattern number (default: the current one)."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long the pattern stays on, in seconds."
+        },
+        "playlist": {
+          "name": "Playlist",
+          "description": "Playlist name (default: the active one)."
+        },
+        "position": {
+          "name": "Position",
+          "description": "Insert at this position (default: the end)."
+        }
+      }
+    },
+    "playlist_remove": {
+      "name": "Remove playlist item",
+      "description": "Remove an item (default: the last one).",
+      "fields": {
+        "index": {
+          "name": "Item",
+          "description": "Item number."
+        },
+        "playlist": {
+          "name": "Playlist",
+          "description": "Playlist name (default: the active one)."
+        }
+      }
+    },
+    "playlist_set_duration": {
+      "name": "Set playlist item duration",
+      "description": "Change how long one item stays on.",
+      "fields": {
+        "index": {
+          "name": "Item",
+          "description": "Item number."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long the pattern stays on, in seconds."
+        },
+        "playlist": {
+          "name": "Playlist",
+          "description": "Playlist name (default: the active one)."
+        }
+      }
+    },
+    "playlist_move": {
+      "name": "Move playlist item",
+      "description": "Move an item to another position.",
+      "fields": {
+        "index": {
+          "name": "Item",
+          "description": "Item number."
+        },
+        "to": {
+          "name": "To",
+          "description": "New position."
+        },
+        "playlist": {
+          "name": "Playlist",
+          "description": "Playlist name (default: the active one)."
         }
       }
     }

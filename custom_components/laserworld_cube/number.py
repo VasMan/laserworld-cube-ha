@@ -44,6 +44,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         CubeEffectSpeed(link, entry),
         CubeHwSpeed(link, entry),
         CubeOverviewPage(link, entry),
+        CubePlaylistSeconds(link, entry),
         *(CubeSettingNumber(link, entry, d) for d in SETTING_NUMBERS),
     ])
 
@@ -264,3 +265,24 @@ class CubeHwSpeed(CubeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.call(self.link.async_set_hw_speed(value))
+
+
+class CubePlaylistSeconds(CubeEntity, NumberEntity):
+    """How long the next pattern added to the playlist stays on."""
+    _attr_mode = NumberMode.BOX
+    _attr_native_step = 0.5
+    _attr_native_min_value = 0.5
+    _attr_native_max_value = 3600
+    _attr_native_unit_of_measurement = "s"
+    _attr_translation_key = "playlist_seconds"
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "playlist_seconds")
+
+    @property
+    def native_value(self) -> float:
+        return self.link.playlist_seconds
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self.link.async_set_playlist_seconds(value))

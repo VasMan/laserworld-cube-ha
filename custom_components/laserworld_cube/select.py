@@ -5,7 +5,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from homeassistant.components.select import SelectEntity
+import voluptuous as vol
 from homeassistant.const import EntityCategory
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import protocol as p
@@ -70,7 +72,31 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         *(CubeSelect(link, entry, d) for d in SELECTS),
         CubeLibrarySelect(link, entry),
         *(CubeSettingSelect(link, entry, d) for d in SETTING_SELECTS),
+        CubePlaylistSelect(link, entry),
     ])
+    platform = entity_platform.async_get_current_platform()
+    secs = vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3600))
+    platform.async_register_entity_service("playlist_add", {
+        vol.Optional("library"): str,
+        vol.Optional("pattern"): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
+        vol.Optional("duration"): secs,
+        vol.Optional("playlist"): str,
+        vol.Optional("position"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
+    }, "async_service_add")
+    platform.async_register_entity_service("playlist_remove", {
+        vol.Optional("index"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
+        vol.Optional("playlist"): str,
+    }, "async_service_remove")
+    platform.async_register_entity_service("playlist_set_duration", {
+        vol.Required("index"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
+        vol.Required("duration"): secs,
+        vol.Optional("playlist"): str,
+    }, "async_service_set_duration")
+    platform.async_register_entity_service("playlist_move", {
+        vol.Required("index"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
+        vol.Required("to"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
+        vol.Optional("playlist"): str,
+    }, "async_service_move")
 
 
 class CubeSelect(CubeEntity, SelectEntity, RestoreEntity):
@@ -173,3 +199,35 @@ class CubeSettingSelect(CubeEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         by_name = {v: k for k, v in self._d.options(self.link).items()}
         await self.call(self.link.async_set_device_settings(**{self._d.field: by_name[option]}))
+
+
+class CubePlaylistSelect(CubeEntity, SelectEntity):
+    """The active playlist. Also the target of the playlist_* services."""
+    _attr_translation_key = "playlist"
+    _attr_icon = "mdi:playlist-play"
+
+    def __init__(self, link: CubeLink, entry) -> None:
+        super().__init__(link, entry, "playlist")
+
+    @property
+    def options(self) -> list[str]:
+        return list(self.link.playlists)
+
+    @property
+    def current_option(self) -> str | None:
+        return self.link.playlist_name
+
+    async def async_select_option(self, option: str) -> None:
+        await self.call(self.link.async_playlist_select(option))
+
+    async def async_service_add(self, library=None, pattern=None, duration=None, playlist=None, position=None):
+        await self.call(self.link.async_playlist_add(library, pattern, duration, playlist, position))
+
+    async def async_service_remove(self, index=None, playlist=None):
+        await self.call(self.link.async_playlist_remove(index, playlist))
+
+    async def async_service_set_duration(self, index, duration, playlist=None):
+        await self.call(self.link.async_playlist_set_duration(index, duration, playlist))
+
+    async def async_service_move(self, index, to, playlist=None):
+        await self.call(self.link.async_playlist_move(index, to, playlist))

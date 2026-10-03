@@ -109,6 +109,16 @@ class CubeLink:
         self.effect_speed = 50
         self._effect_task: asyncio.Task | None = None
         self.overview_page: int | None = None   # None = follow the current pattern
+        # playlists (timed from here, like the app's own playlist player)
+        self.playlists: dict[str, list[dict]] = {}   # name -> [{"lib", "name", "n", "seconds"}]
+        self.playlist_name: str | None = None
+        self.playlist_seconds = 5.0                  # duration given to the next added item
+        self.playlist_repeat = True
+        self.playlist_on = False
+        self.playlist_index = 0                      # item being shown while the playlist runs
+        self.on_playlists_changed: Callable[[], None] | None = None
+        self.playlist_store: Any = None
+        self._playlist_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------ listeners
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -310,7 +320,8 @@ class CubeLink:
             self._idle_handle.cancel()
             self._idle_handle = None
         if self.idle_timeout > 0 and self._client is not None and not self.loop_on and not self._thumbs_running() \
-                and not self._effect_running():
+                and not self._effect_running() \
+                and not self._playlist_running():
             loop = asyncio.get_running_loop()
             self._idle_handle = loop.call_later(
                 self.idle_timeout, lambda: loop.create_task(self.disconnect()))
@@ -318,6 +329,7 @@ class CubeLink:
     async def disconnect(self) -> None:
         """Politely close the link so the phone app can connect again."""
         self._cancel_loop()
+        self._cancel_playlist()
         self._cancel_thumbs()
         await self._stop_effect(restore=True)
         if self._idle_handle:
@@ -377,6 +389,7 @@ class CubeLink:
         self.laser_on = on
         if not on:
             self._cancel_loop()
+            self._cancel_playlist()
         self._notify()
 
     async def async_set_run_mode(self, mode: int) -> None:
@@ -464,6 +477,7 @@ class CubeLink:
 
     async def async_stop(self) -> None:
         self._cancel_loop()
+        self._cancel_playlist()
         self.text_active = False
         await self.async_set_play_state(p.PLAY_STATE_STOP)
 
@@ -519,6 +533,7 @@ class CubeLink:
             raise CubeError("No pattern libraries loaded yet - press 'Read settings'")
         if self._loop_task is not None:
             return
+        self._cancel_playlist()
         self.loop_on = True
         self._loop_task = asyncio.get_running_loop().create_task(self._loop_runner())
         self._notify()
@@ -766,6 +781,7 @@ class CubeLink:
         self.play_state = p.PLAY_STATE_PLAY
         self.text_active = True
         self._cancel_loop()
+        self._cancel_playlist()
         self._notify()
 
     async def async_send_effect(self, channels: list[int], step: int = 0, steps: int = 1,
@@ -1038,3 +1054,194 @@ class CubeLink:
             await self.async_set_hw_effect(self.hw_effect)
         else:
             self._notify()
+
+    # ---------------------------------------------------------------- playlists
+    def current_playlist(self) -> list[dict] | None:
+        return self.playlists.get(self.playlist_name) if self.playlist_name else None
+
+    def playlist_total_seconds(self, name: str | None = None) -> float:
+        items = self.playlists.get(name or self.playlist_name or "", [])
+        return sum(i["seconds"] for i in items)
+
+    def find_library(self, text: str | None) -> p.Library | None:
+        """Library by key, label or name (case-insensitive); None = the selected one."""
+        if text is None:
+            return self.current_library
+        t = text.strip().lower()
+        for lib in self.libraries:
+            if t in (lib.key.lower(), lib.label.lower(), lib.name.lower()):
+                return lib
+        return None
+
+    def _playlists_changed(self) -> None:
+        self._notify()
+        if self.on_playlists_changed:
+            self.on_playlists_changed()
+
+    def _playlist_for(self, name: str | None) -> tuple[str, list[dict]]:
+        name = name or self.playlist_name
+        if not name or name not in self.playlists:
+            raise CubeUserError("There is no playlist yet - press 'New playlist'")
+        return name, self.playlists[name]
+
+    async def async_playlist_create(self, name: str | None = None) -> None:
+        if not name:
+            n = 1
+            while f"Playlist {n}" in self.playlists:
+                n += 1
+            name = f"Playlist {n}"
+        name = name.strip()
+        if name in self.playlists:
+            raise CubeUserError(f"A playlist called '{name}' already exists")
+        self.playlists[name] = []
+        self.playlist_name = name
+        self._playlists_changed()
+
+    async def async_playlist_delete(self, name: str | None = None) -> None:
+        name, _ = self._playlist_for(name)
+        if self.playlist_on and name == self.playlist_name:
+            self._cancel_playlist()
+        del self.playlists[name]
+        if self.playlist_name == name:
+            self.playlist_name = next(iter(self.playlists), None)
+        self._playlists_changed()
+
+    async def async_playlist_select(self, name: str) -> None:
+        if name not in self.playlists:
+            raise CubeUserError(f"Unknown playlist '{name}'")
+        if self.playlist_on:
+            self._cancel_playlist()
+        self.playlist_name = name
+        self._playlists_changed()
+
+    async def async_playlist_add(self, library: str | None = None, pattern: int | None = None,
+                                 seconds: float | None = None, playlist: str | None = None,
+                                 position: int | None = None) -> None:
+        """Add a pattern (default: the one currently selected) with its on-time."""
+        if not self.playlists and not playlist:
+            await self.async_playlist_create()
+        elif playlist and playlist not in self.playlists:
+            await self.async_playlist_create(playlist)
+        name, items = self._playlist_for(playlist)
+        lib = self.find_library(library)
+        if lib is None:
+            raise CubeUserError(f"Unknown library {library!r}" if library else
+                                "No pattern libraries loaded yet - press 'Read settings'")
+        n = self.pattern_index if pattern is None else int(pattern)
+        if not 1 <= n <= lib.size:
+            raise CubeUserError(f"{lib.name} has patterns 1-{lib.size}")
+        secs = float(self.playlist_seconds if seconds is None else seconds)
+        if not 0.5 <= secs <= 3600:
+            raise CubeUserError("duration must be between 0.5 and 3600 seconds")
+        item = {"lib": lib.key, "name": lib.name, "n": n, "seconds": secs}
+        if position is None or not 1 <= int(position) <= len(items):
+            items.append(item)
+        else:
+            items.insert(int(position) - 1, item)
+        self._playlists_changed()
+
+    async def async_playlist_remove(self, index: int | None = None, playlist: str | None = None) -> None:
+        name, items = self._playlist_for(playlist)
+        if not items:
+            raise CubeUserError("The playlist is empty")
+        i = len(items) if index is None else int(index)
+        if not 1 <= i <= len(items):
+            raise CubeUserError(f"The playlist has items 1-{len(items)}")
+        del items[i - 1]
+        self._playlists_changed()
+
+    async def async_playlist_clear(self, playlist: str | None = None) -> None:
+        name, items = self._playlist_for(playlist)
+        if self.playlist_on and name == self.playlist_name:
+            self._cancel_playlist()
+        items.clear()
+        self._playlists_changed()
+
+    async def async_playlist_set_duration(self, index: int, seconds: float,
+                                          playlist: str | None = None) -> None:
+        _, items = self._playlist_for(playlist)
+        if not 1 <= int(index) <= len(items):
+            raise CubeUserError(f"The playlist has items 1-{len(items)}")
+        if not 0.5 <= float(seconds) <= 3600:
+            raise CubeUserError("duration must be between 0.5 and 3600 seconds")
+        items[int(index) - 1]["seconds"] = float(seconds)
+        self._playlists_changed()
+
+    async def async_playlist_move(self, index: int, to: int, playlist: str | None = None) -> None:
+        _, items = self._playlist_for(playlist)
+        if not (1 <= int(index) <= len(items) and 1 <= int(to) <= len(items)):
+            raise CubeUserError(f"The playlist has items 1-{len(items)}")
+        items.insert(int(to) - 1, items.pop(int(index) - 1))
+        self._playlists_changed()
+
+    async def async_set_playlist_seconds(self, seconds: float) -> None:
+        self.playlist_seconds = min(3600.0, max(0.5, float(seconds)))
+        self._notify()
+
+    async def async_set_playlist_repeat(self, repeat: bool) -> None:
+        self.playlist_repeat = bool(repeat)
+        self._notify()
+
+    def _playlist_running(self) -> bool:
+        return self._playlist_task is not None and not self._playlist_task.done()
+
+    def _cancel_playlist(self) -> None:
+        task, self._playlist_task = self._playlist_task, None
+        self.playlist_on = False
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def async_playlist_play(self, repeat: bool | None = None) -> None:
+        """Play the active playlist: each pattern for its own time."""
+        if repeat is not None:
+            self.playlist_repeat = bool(repeat)
+        name, items = self._playlist_for(None)
+        if not items:
+            raise CubeUserError("The playlist is empty - add patterns first")
+        if not self.libraries:
+            raise CubeUserError("No pattern libraries loaded yet - press 'Read settings'")
+        self._cancel_loop()
+        self._cancel_playlist()
+        self.playlist_on = True
+        self._playlist_task = asyncio.get_running_loop().create_task(self._playlist_runner(name))
+        self._notify()
+
+    async def async_playlist_stop(self) -> None:
+        self._cancel_playlist()
+        self._notify()
+
+    async def _playlist_runner(self, name: str) -> None:
+        me = asyncio.current_task()
+        try:
+            while True:
+                played = 0
+                i = 0
+                while True:
+                    items = self.playlists.get(name) or []     # re-read: edits apply immediately
+                    if i >= len(items):
+                        break
+                    item = items[i]
+                    lib = self.find_library(item["lib"])
+                    if lib is None or not 1 <= item["n"] <= lib.size:
+                        _LOGGER.warning("playlist item %d (%s %s) is not available on this laser; skipped",
+                                        i + 1, item.get("name"), item.get("n"))
+                        i += 1
+                        continue
+                    self.playlist_index = i
+                    await self.async_select_library(self.libraries.index(lib))
+                    await self.async_play_index(item["n"])
+                    played += 1
+                    await asyncio.sleep(item["seconds"])
+                    i += 1
+                if not self.playlist_repeat or played == 0:
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("playlist stopped: %s", err)
+        finally:
+            if self._playlist_task is me:
+                self._playlist_task = None
+                self.playlist_on = False
+                self._arm_idle()
+                self._notify()

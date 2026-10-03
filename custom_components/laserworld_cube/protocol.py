@@ -556,6 +556,11 @@ class Library:
     def size(self) -> int:
         return sum(c for _, c in self.pages)
 
+    @property
+    def key(self) -> str:
+        """Stable identity (survives re-reading the catalog), used by saved playlists."""
+        return f"{self.files_number}:{self.merge}:{int(self.effect_group)}"
+
     def item(self, n: int) -> tuple[int, int]:
         """Map pattern number n (1-based) to the device's (page, file)."""
         if not 1 <= n <= self.size:

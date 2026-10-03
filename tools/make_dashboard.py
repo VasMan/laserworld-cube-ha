@@ -42,7 +42,8 @@ def build(slug: str = "laserworld_cube_847e") -> str:
     img = f"image.{slug}_library_overview"
     lines = [
         "# Library browser for the Laserworld Cube integration.",
-        "# Tap a thumbnail to play it; tap the arrows on the image to change page.",
+        "# Tap a thumbnail to play it, long-press it to add it to the playlist;",
+        "# tap the arrows on the image to change page.",
         "# Dashboard > Edit > Add card > Manual, then paste this. Adjust the entity ids if yours differ.",
         "type: vertical-stack",
         "cards:",
@@ -55,16 +56,22 @@ def build(slug: str = "laserworld_cube_847e") -> str:
             action = ["          perform_action: laserworld_cube.play_overview_tile",
                       "          target:", f"            entity_id: {img}",
                       "          data:", f"            tile: {z['tile']}"]
+            hold = ["        hold_action:", "          action: perform-action",
+                    "          perform_action: laserworld_cube.playlist_add_tile",
+                    "          target:", f"            entity_id: {img}",
+                    "          data:", f"            tile: {z['tile']}"]
             label = f"tile {z['tile']}"
         else:
             svc = "overview_next_page" if z["kind"] == "next" else "overview_previous_page"
             action = [f"          perform_action: laserworld_cube.{svc}",
                       "          target:", f"            entity_id: {img}"]
+            hold = []
             label = f"{z['kind']} page"
         lines += [
             f"      - type: image  # {label}",
             f'        image: "{TRANSPARENT}"',
             "        tap_action:", "          action: perform-action", *action,
+            *hold,
             "        style:",
             f"          left: {z['left']:.2f}%", f"          top: {z['top']:.2f}%",
             f"          width: {z['width']:.2f}%",
@@ -76,6 +83,40 @@ def build(slug: str = "laserworld_cube_847e") -> str:
         f"      - number.{slug}_pattern_number",
         f"      - text.{slug}_text",
         f"      - select.{slug}_text_color",
+        "  - type: entities",
+        "    title: Playlist",
+        "    entities:",
+        f"      - select.{slug}_playlist",
+        f"      - number.{slug}_playlist_item_duration",
+        f"      - button.{slug}_add_to_playlist",
+        f"      - switch.{slug}_play_playlist",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def build_playlist(slug: str = "laserworld_cube_847e") -> str:
+    """A card for managing and playing playlists."""
+    lines = [
+        "# Playlist card for the Laserworld Cube integration.",
+        "# Dashboard > Edit > Add card > Manual, then paste this.",
+        "type: vertical-stack",
+        "cards:",
+        "  - type: picture-entity",
+        f"    entity: image.{slug}_playlist_overview",
+        "    show_name: false",
+        "    show_state: false",
+        "  - type: entities",
+        "    entities:",
+        f"      - select.{slug}_playlist",
+        f"      - switch.{slug}_play_playlist",
+        f"      - switch.{slug}_repeat_playlist",
+        f"      - number.{slug}_playlist_item_duration",
+        f"      - button.{slug}_add_to_playlist",
+        f"      - button.{slug}_remove_last_playlist_item",
+        f"      - button.{slug}_clear_playlist",
+        f"      - button.{slug}_new_playlist",
+        f"      - button.{slug}_delete_playlist",
+        f"      - sensor.{slug}_playlist_summary",
     ]
     return "\n".join(lines) + "\n"
 
@@ -84,4 +125,6 @@ if __name__ == "__main__":
     slug = sys.argv[1] if len(sys.argv) > 1 else "laserworld_cube_847e"
     out = ROOT / "dashboard" / "library_browser.yaml"
     out.write_text(build(slug))
-    print(f"wrote {out} ({TILES} tiles + 2 page controls)")
+    out2 = ROOT / "dashboard" / "playlist.yaml"
+    out2.write_text(build_playlist(slug))
+    print(f"wrote {out} ({TILES} tiles + 2 page controls) and {out2}")

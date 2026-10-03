@@ -1,5 +1,6 @@
 # Library browser for the Laserworld Cube integration.
-# Tap a thumbnail to play it; tap the arrows on the image to change page.
+# Tap a thumbnail to play it, long-press it to add it to the playlist;
+# tap the arrows on the image to change page.
 # Dashboard > Edit > Add card > Manual, then paste this. Adjust the entity ids if yours differ.
 type: vertical-stack
 cards:
@@ -11,6 +12,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 1
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -28,6 +36,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 2
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 2
         style:
           left: 30.20%
           top: 18.09%
@@ -37,6 +52,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 3
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -54,6 +76,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 4
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 4
         style:
           left: 69.80%
           top: 18.09%
@@ -63,6 +92,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 5
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -80,6 +116,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 6
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 6
         style:
           left: 10.40%
           top: 41.32%
@@ -89,6 +132,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 7
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -106,6 +156,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 8
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 8
         style:
           left: 50.00%
           top: 41.32%
@@ -115,6 +172,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 9
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -132,6 +196,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 10
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 10
         style:
           left: 89.60%
           top: 41.32%
@@ -141,6 +212,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 11
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -158,6 +236,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 12
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 12
         style:
           left: 30.20%
           top: 64.56%
@@ -167,6 +252,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 13
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -184,6 +276,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 14
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 14
         style:
           left: 69.80%
           top: 64.56%
@@ -193,6 +292,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 15
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -210,6 +316,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 16
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 16
         style:
           left: 10.40%
           top: 87.79%
@@ -219,6 +332,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 17
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -236,6 +356,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 18
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 18
         style:
           left: 50.00%
           top: 87.79%
@@ -249,6 +376,13 @@ cards:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
             tile: 19
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 19
         style:
           left: 69.80%
           top: 87.79%
@@ -258,6 +392,13 @@ cards:
         tap_action:
           action: perform-action
           perform_action: laserworld_cube.play_overview_tile
+          target:
+            entity_id: image.laserworld_cube_847e_library_overview
+          data:
+            tile: 20
+        hold_action:
+          action: perform-action
+          perform_action: laserworld_cube.playlist_add_tile
           target:
             entity_id: image.laserworld_cube_847e_library_overview
           data:
@@ -294,3 +435,10 @@ cards:
       - number.laserworld_cube_847e_pattern_number
       - text.laserworld_cube_847e_text
       - select.laserworld_cube_847e_text_color
+  - type: entities
+    title: Playlist
+    entities:
+      - select.laserworld_cube_847e_playlist
+      - number.laserworld_cube_847e_playlist_item_duration
+      - button.laserworld_cube_847e_add_to_playlist
+      - switch.laserworld_cube_847e_play_playlist

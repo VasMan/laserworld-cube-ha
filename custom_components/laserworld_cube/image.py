@@ -15,13 +15,19 @@ PAGE = protocol.OVERVIEW_PAGE  # patterns per overview sheet (5 x 4)
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
-    async_add_entities([CubePatternPreview(hass, link, entry), CubeLibraryOverview(hass, link, entry)])
+    async_add_entities([CubePatternPreview(hass, link, entry), CubeLibraryOverview(hass, link, entry),
+                        CubePlaylistOverview(hass, link, entry)])
     # services used by dashboard cards (see dashboard/library_browser.yaml)
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
         "play_overview_tile",
         {vol.Required("tile"): vol.All(vol.Coerce(int), vol.Range(min=1, max=PAGE))},
         "async_play_tile")
+    platform.async_register_entity_service(
+        "playlist_add_tile",
+        {vol.Required("tile"): vol.All(vol.Coerce(int), vol.Range(min=1, max=PAGE)),
+         vol.Optional("duration"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3600))},
+        "async_playlist_add_tile")
     platform.async_register_entity_service("overview_next_page", {}, "async_page_next")
     platform.async_register_entity_service("overview_previous_page", {}, "async_page_previous")
 
@@ -116,8 +122,46 @@ class CubeLibraryOverview(_CubeImage):
             raise HomeAssistantError("There is no pattern in that slot")
         await self.call(self.link.async_play_index(n))
 
+    async def async_playlist_add_tile(self, tile: int, duration: float | None = None) -> None:
+        """Add the pattern in tile ``tile`` of the current page to the active playlist."""
+        lib, a, b = self._page()
+        n = a + tile - 1
+        if lib is None or n > b:
+            raise HomeAssistantError("There is no pattern in that slot")
+        await self.call(self.link.async_playlist_add(lib.key, n, duration))
+
     async def async_page_next(self) -> None:
         await self.call(self.link.async_overview_step(1))
 
     async def async_page_previous(self) -> None:
         await self.call(self.link.async_overview_step(-1))
+
+
+class CubePlaylistOverview(_CubeImage):
+    """The active playlist: thumbnails with group, pattern number and on-time."""
+
+    def __init__(self, hass, link, entry) -> None:
+        super().__init__(hass, link, entry, "playlist_overview")
+
+    def _entries(self):
+        out = []
+        for it in self.link.current_playlist() or []:
+            lib = self.link.find_library(it["lib"])
+            flat = self.link.get_thumb(lib, it["n"]) if lib and 1 <= it["n"] <= lib.size else None
+            out.append({"label": f"{it['name']} {it['n']}", "seconds": it["seconds"], "flat": flat})
+        return out
+
+    def _signature(self):
+        items = self.link.current_playlist() or []
+        have = sum(1 for e in self._entries() if e["flat"] is not None)
+        return (self.link.playlist_name, tuple((i["lib"], i["n"], i["seconds"]) for i in items),
+                self.link.playlist_index if self.link.playlist_on else None, have)
+
+    def _render(self) -> bytes:
+        entries = self._entries()
+        name = self.link.playlist_name
+        title = "No playlist - press 'New playlist'" if name is None else (
+            f"{name}  -  {len(entries)} items, {self.link.playlist_total_seconds():g} s"
+            + ("  (playing)" if self.link.playlist_on else ""))
+        return thumbs.render_playlist(entries, self.link.playlist_index if self.link.playlist_on else None,
+                                      title=title)

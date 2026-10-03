@@ -52,6 +52,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> bool
         link.thumbs.update({k: v for k, v in (cached.get("thumbs") or {}).items() if isinstance(v, list)})
     link.on_thumbs_changed = lambda: store.async_delay_save(lambda: {"thumbs": link.thumbs}, 15)
 
+    # playlists are saved so they survive restarts
+    pstore = Store(hass, 1, f"{DOMAIN}.playlists_{address.replace(':', '').lower()}")
+    link.playlist_store = pstore
+    saved = await pstore.async_load()
+    if isinstance(saved, dict):
+        link.playlists.update({k: v for k, v in (saved.get("playlists") or {}).items() if isinstance(v, list)})
+        active = saved.get("active")
+        link.playlist_name = active if active in link.playlists else next(iter(link.playlists), None)
+        link.playlist_seconds = float(saved.get("seconds", link.playlist_seconds))
+        link.playlist_repeat = bool(saved.get("repeat", True))
+    link.on_playlists_changed = lambda: pstore.async_delay_save(
+        lambda: {"playlists": link.playlists, "active": link.playlist_name,
+                 "seconds": link.playlist_seconds, "repeat": link.playlist_repeat}, 3)
+
     async def _initial_read() -> None:
         try:
             await link.async_connect()
@@ -98,4 +112,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> boo
         await link.disconnect()
         if link.thumbs and link.store is not None:
             await link.store.async_save({"thumbs": link.thumbs})
+        pstore = getattr(link, "playlist_store", None)
+        if pstore is not None:
+            await pstore.async_save({"playlists": link.playlists, "active": link.playlist_name,
+                                     "seconds": link.playlist_seconds, "repeat": link.playlist_repeat})
     return ok

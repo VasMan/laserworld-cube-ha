@@ -777,3 +777,114 @@ def test_hardware_effect_unsupported_layout_leaves_state_unchanged():
         assert link.hw_effect == 1
         await link.disconnect()
     asyncio.run(go())
+
+
+def test_playlist_editing_and_validation():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        saved = []
+        link.on_playlists_changed = lambda: saved.append(sum(len(v) for v in link.playlists.values()))
+        await link.async_connect()
+        await link.async_select_library(0); await link.async_play_index(3)       # Timetunnel #3
+        await link.async_playlist_add()                       # auto-creates "Playlist 1"; current pattern, default 5 s
+        assert link.playlist_name == "Playlist 1"
+        assert link.current_playlist() == [{"lib": link.libraries[0].key, "name": "Timetunnel", "n": 3, "seconds": 5.0}]
+        await link.async_set_playlist_seconds(12)
+        await link.async_playlist_add(library="hotspot", pattern=70)                 # another group, by name
+        await link.async_playlist_add(library="Northlight (16)", pattern=5, seconds=2.5, position=1)
+        names = [(i["name"], i["n"], i["seconds"]) for i in link.current_playlist()]
+        assert names == [("Northlight", 5, 2.5), ("Timetunnel", 3, 5.0), ("Hotspot", 70, 12.0)]
+        assert link.playlist_total_seconds() == 19.5
+        await link.async_playlist_move(3, 1)
+        assert [i["name"] for i in link.current_playlist()] == ["Hotspot", "Northlight", "Timetunnel"]
+        await link.async_playlist_set_duration(2, 8)
+        assert link.current_playlist()[1]["seconds"] == 8
+        await link.async_playlist_remove(1)
+        assert [i["name"] for i in link.current_playlist()] == ["Northlight", "Timetunnel"]
+        await link.async_playlist_remove()                                           # last
+        assert [i["name"] for i in link.current_playlist()] == ["Northlight"]
+        # several playlists
+        await link.async_playlist_create("Party")
+        assert link.playlist_name == "Party" and link.current_playlist() == []
+        await link.async_playlist_add(library="Animation", pattern=36, playlist="Party")
+        await link.async_playlist_select("Playlist 1"); assert len(link.current_playlist()) == 1
+        await link.async_playlist_delete("Playlist 1")
+        assert link.playlist_name == "Party" and "Playlist 1" not in link.playlists
+        await link.async_playlist_clear(); assert link.current_playlist() == []
+        assert saved                                                                  # persistence hook fired
+        # validation
+        for call in (lambda: link.async_playlist_add(library="Nope"), lambda: link.async_playlist_add(library="Hotspot", pattern=129),
+                     lambda: link.async_playlist_add(library="Hotspot", pattern=1, seconds=0.1),
+                     lambda: link.async_playlist_create("Party"), lambda: link.async_playlist_remove(),
+                     lambda: link.async_playlist_set_duration(5, 3), lambda: link.async_playlist_select("zzz")):
+            try:
+                await call(); raise AssertionError("expected CubeUserError")
+            except c.CubeUserError:
+                pass
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_playlist_plays_each_pattern_for_its_time_and_repeats():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0.05)               # idle timer must not interrupt a playlist
+        await link.async_set_laser(True)
+        for lib, n in (("Timetunnel", 3), ("Hotspot", 70), ("Northlight", 5)):
+            await link.async_playlist_add(library=lib, pattern=n)
+        for item, secs in zip(link.current_playlist(), (0.1, 0.2, 0.1)):
+            item["seconds"] = secs                               # short times for the test
+        n0 = len(dev.frames)
+        await link.async_playlist_play(repeat=True)
+        assert link.playlist_on
+        await asyncio.sleep(0.25)
+        assert dev.frames[n0:n0 + 2] == [(1, 3), (6, 6)]       # different groups, right page/file
+        await asyncio.sleep(0.6)
+        assert link.connected and link.playlist_on
+        seq = dev.frames[n0:]
+        assert (2, 5) in seq and seq.count((1, 3)) >= 2        # went on to the third item and repeated
+        await link.async_playlist_stop()
+        assert not link.playlist_on
+        m = len(dev.frames); await asyncio.sleep(0.4); assert len(dev.frames) == m
+        # play once (no repeat) ends by itself
+        await link.async_playlist_play(repeat=False)
+        await asyncio.sleep(0.8)
+        assert not link.playlist_on
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_playlist_edits_apply_live_missing_items_are_skipped_and_cancellation():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_laser(True)
+        await link.async_playlist_add(library="Timetunnel", pattern=1)
+        await link.async_playlist_add(library="Timetunnel", pattern=2)
+        link.current_playlist()[0]["seconds"] = 0.2
+        link.current_playlist()[1]["seconds"] = 0.2
+        link.current_playlist().insert(1, {"lib": "99:0:0", "name": "Gone", "n": 1, "seconds": 0.1})   # not on this laser
+        n0 = len(dev.frames)
+        await link.async_playlist_play(repeat=False)
+        await asyncio.sleep(0.15)
+        link.current_playlist()[:] = [link.current_playlist()[0], {"lib": link.libraries[0].key, "name": "Timetunnel", "n": 7, "seconds": 0.1}]
+        await asyncio.sleep(0.5)
+        assert dev.frames[n0:] == [(1, 1), (1, 7)]              # the unknown item was skipped, the live edit was used
+        # laser off, loop and stop all end a playlist
+        link.current_playlist()[0]["seconds"] = 5
+        await link.async_playlist_play(repeat=True); assert link.playlist_on
+        await link.async_set_laser(False); assert not link.playlist_on
+        await link.async_set_laser(True); await link.async_playlist_play(); assert link.playlist_on
+        await link.async_set_loop(True); assert not link.playlist_on and link.loop_on
+        await link.async_set_loop(False)
+        await link.async_playlist_play(); await link.async_stop(); assert not link.playlist_on
+        await link.async_playlist_play()
+        await link.disconnect(); assert not link.playlist_on
+        # empty playlist / no playlist cannot be played
+        await link.async_playlist_clear()
+        try:
+            await link.async_playlist_play(); raise AssertionError("expected CubeUserError")
+        except c.CubeUserError:
+            pass
+    asyncio.run(go())

@@ -56,7 +56,7 @@ laser's content). While a build runs the integration keeps the Bluetooth link op
 ### Pick patterns visually (dashboard card)
 Home Assistant's pop-up for an image can't contain buttons, so browsing happens on a dashboard card.
 `dashboard/library_browser.yaml` gives you a card where you can **tap any thumbnail to play it** and
-**tap the ◀ ▶ arrows drawn on the image to change page** – no leaving the view:
+**tap the ◀ ▶ arrows drawn on the image to change page**, and **long-press a thumbnail to add it to the playlist** – no leaving the view:
 
 1. Dashboard → ⋮ → *Edit dashboard* → **Add card** → scroll to **Manual**.
 2. Paste the contents of `dashboard/library_browser.yaml` and save.
@@ -66,6 +66,53 @@ Home Assistant's pop-up for an image can't contain buttons, so browsing happens 
 
 Underneath the card the same functions are available as services (`laserworld_cube.play_overview_tile`,
 `overview_next_page`, `overview_previous_page`), so you can also call them from scripts.
+
+## Playlists
+Build your own show from patterns of **any libraries** and choose **how long each one stays on** – like
+the official app's *Equipment playList*. Playlists are saved and survive restarts; you can have several.
+
+**Build one**
+1. Press **New playlist** (it gets the name *Playlist 1*, *2*, …).
+2. Set **Playlist item duration** (seconds the *next* pattern will stay on).
+3. Find a pattern – pick a library and number, or tap it in the library browser card – then press
+   **Add to playlist**. Repeat with other libraries and other durations.
+   *Shortcut:* **long-press a thumbnail** in the library browser card to add it directly.
+4. **Playlist overview** (image) shows the list with thumbnails, group, pattern number and on-time;
+   **Playlist summary** (sensor) lists the items. Fix mistakes with **Remove last playlist item**,
+   **Clear playlist**, or the services below.
+
+**Play it**: turn on **Play playlist**. Each pattern is shown for its own time; **Repeat playlist**
+(on by default) loops forever, otherwise it plays once and stops. Edits made while it plays take effect
+immediately. Turning the laser off, pressing Stop, starting Loop play or showing text ends it.
+Choose another playlist with the **Playlist** select; **Delete playlist** removes the active one.
+
+**Services** (for automations and scripts; target the *Playlist* select, or the overview image for tiles):
+
+| Service | What it does |
+|---|---|
+| `laserworld_cube.playlist_add` | Add a pattern: `library` (e.g. `Hotspot`), `pattern`, `duration`, optional `playlist`, `position` |
+| `laserworld_cube.playlist_remove` | Remove item `index` (default: the last) |
+| `laserworld_cube.playlist_set_duration` | Change how long item `index` stays on |
+| `laserworld_cube.playlist_move` | Move item `index` to position `to` |
+| `laserworld_cube.playlist_add_tile` | Add tile 1–20 of the library overview image (what long-press uses) |
+
+```yaml
+action: laserworld_cube.playlist_add
+target:
+  entity_id: select.laserworld_cube_847e_playlist
+data:
+  library: Hotspot
+  pattern: 45
+  duration: 12
+```
+
+Dashboard: `dashboard/playlist.yaml` is a ready-made card (add it like the library browser card).
+
+**How this differs from the app's "Offline play":** here Home Assistant times the playlist, so it needs
+to stay running and connected over Bluetooth while it plays (and the phone app must be closed). The
+app's *Offline play* saves a list **into the laser** so it plays on its own – but in the laser's
+protocol such a saved list holds only the patterns, **without per-pattern durations**, so it cannot do
+what you asked for. This integration therefore does the timing itself.
 
 ## Showing text
 Type into the **Text** entity (it starts as *Alexandros*; change it any time) and the laser displays
@@ -186,6 +233,7 @@ or changing *Scanning speed* is your responsibility.
 | Software effect, Software effect speed | Stepwise motion effects driven from Home Assistant (scroll, bounce, rotate, pulse) |
 | Hardware effect, Hardware effect speed, Hardware effect layout | Smooth laser-side effects for text (rotate, move, zoom, waves, color flow, gradual drawing) |
 | DMX channel counts (sensor) | The laser's standard / professional / scene channel counts (diagnostic) |
+| Playlist, New / Delete playlist, Add to playlist, Remove last item, Clear playlist, Playlist item duration, Play playlist, Repeat playlist, Playlist overview (image), Playlist summary (sensor) | Playlists of patterns from any library, each with its own on-time |
 | Overview page, Overview previous / next page | Browse libraries with more than 20 patterns |
 | DMX address/mode, Functional mode, Scanning speed, Device size/position, Invert/Swap, Color setting, Master, Safety, … | Saved device settings (Configuration) |
 | Pattern color (select) | Original colors, White … Purple, Flowing (+ optional *Color flow*, *Color flow speed*) |
@@ -205,7 +253,7 @@ Requires the *Pillow* image library (Home Assistant installs it automatically if
 not stored in the laser, so Loop play uses one fixed interval instead.
 
 ## Not (yet) supported
-Playlists / *Offline play*, drawing and image playback, the app's own cloud-defined effects, *Program*, DMX channel
+Saving a playlist into the laser (*Offline play*), drawing and image playback, the app's own cloud-defined effects, *Program*, DMX channel
 console, device setup (invert, scan rate persistence), activation, binding management.
 
 ## Troubleshooting
