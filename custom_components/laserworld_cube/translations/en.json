@@ -279,6 +279,9 @@
     "text": {
       "message": {
         "name": "Text"
+      },
+      "playlist_name": {
+        "name": "Playlist name"
       }
     },
     "image": {
@@ -469,6 +472,30 @@
         "invert": {
           "name": "Invert",
           "description": "Use light picture parts as the drawing (for light-on-dark pictures)."
+        }
+      }
+    },
+    "playlist_rename": {
+      "name": "Rename playlist",
+      "description": "Give a playlist a new name (default: the active playlist).",
+      "fields": {
+        "name": {
+          "name": "New name",
+          "description": "Up to 40 characters."
+        },
+        "playlist": {
+          "name": "Playlist",
+          "description": "Playlist to rename (default: the active one)."
+        }
+      }
+    },
+    "playlist_create": {
+      "name": "Create playlist",
+      "description": "Create a new, empty playlist and make it the active one.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Optional; default Playlist 1, 2, ..."
         }
       }
     }

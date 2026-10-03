@@ -236,3 +236,29 @@ show_image:
     invert:
       selector:
         boolean:
+
+playlist_rename:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: select
+  fields:
+    name:
+      required: true
+      example: Party night
+      selector:
+        text:
+    playlist:
+      selector:
+        text:
+
+playlist_create:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: select
+  fields:
+    name:
+      example: Party night
+      selector:
+        text:

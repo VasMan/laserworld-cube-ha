@@ -134,6 +134,7 @@ class CubeLink:
         self.on_playlists_changed: Callable[[], None] | None = None
         self.playlist_store: Any = None
         self._playlist_task: asyncio.Task | None = None
+        self._playlist_playing: str | None = None    # name of the playlist the runner is using
 
     @property
     def text_active(self) -> bool:
@@ -1135,17 +1136,40 @@ class CubeLink:
             raise CubeUserError("There is no playlist yet - press 'New playlist'")
         return name, self.playlists[name]
 
-    async def async_playlist_create(self, name: str | None = None) -> None:
+    def _clean_playlist_name(self, name: str, exclude: str | None = None) -> str:
+        name = " ".join(str(name).split())            # trim and collapse whitespace
         if not name:
+            raise CubeUserError("A playlist needs a name")
+        if len(name) > 40:
+            raise CubeUserError("Playlist names can be at most 40 characters")
+        if any(k.lower() == name.lower() and k != exclude for k in self.playlists):
+            raise CubeUserError(f"A playlist called '{name}' already exists")
+        return name
+
+    async def async_playlist_create(self, name: str | None = None) -> None:
+        if name is None or not str(name).strip():
             n = 1
             while f"Playlist {n}" in self.playlists:
                 n += 1
             name = f"Playlist {n}"
-        name = name.strip()
-        if name in self.playlists:
-            raise CubeUserError(f"A playlist called '{name}' already exists")
+        name = self._clean_playlist_name(name)
         self.playlists[name] = []
         self.playlist_name = name
+        self._playlists_changed()
+
+    async def async_playlist_rename(self, new_name: str, playlist: str | None = None) -> None:
+        """Rename a playlist (default: the active one); a playing playlist keeps playing."""
+        old, _ = self._playlist_for(playlist)
+        new = self._clean_playlist_name(new_name, exclude=old)
+        if new == old:
+            return
+        renamed = {(new if k == old else k): v for k, v in self.playlists.items()}   # keeps the order
+        self.playlists.clear()
+        self.playlists.update(renamed)
+        if self.playlist_name == old:
+            self.playlist_name = new
+        if self._playlist_playing == old:
+            self._playlist_playing = new
         self._playlists_changed()
 
     async def async_playlist_delete(self, name: str | None = None) -> None:
@@ -1254,21 +1278,22 @@ class CubeLink:
         self._cancel_loop()
         self._cancel_playlist()
         self.playlist_on = True
-        self._playlist_task = asyncio.get_running_loop().create_task(self._playlist_runner(name))
+        self._playlist_playing = name
+        self._playlist_task = asyncio.get_running_loop().create_task(self._playlist_runner())
         self._notify()
 
     async def async_playlist_stop(self) -> None:
         self._cancel_playlist()
         self._notify()
 
-    async def _playlist_runner(self, name: str) -> None:
+    async def _playlist_runner(self) -> None:
         me = asyncio.current_task()
         try:
             while True:
                 played = 0
                 i = 0
                 while True:
-                    items = self.playlists.get(name) or []     # re-read: edits apply immediately
+                    items = self.playlists.get(self._playlist_playing or "") or []   # re-read: edits and renames apply
                     if i >= len(items):
                         break
                     item = items[i]

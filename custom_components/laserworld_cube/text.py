@@ -12,7 +12,7 @@ from .entity import CubeEntity
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
-    async_add_entities([CubeTextMessage(entry.runtime_data, entry)])
+    async_add_entities([CubeTextMessage(entry.runtime_data, entry), CubePlaylistName(entry.runtime_data, entry)])
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
         "send_effect",
@@ -77,3 +77,28 @@ class CubeTextMessage(CubeEntity, TextEntity):
 
 async def _read(hass, source):
     return await media.async_read_image(hass, source)
+
+
+class CubePlaylistName(CubeEntity, TextEntity):
+    """The name of the active playlist. Editing it renames the playlist.
+
+    With no playlist yet, entering a name creates one with that name.
+    """
+    _attr_mode = TextMode.TEXT
+    _attr_native_min = 0
+    _attr_native_max = 40
+    _attr_translation_key = "playlist_name"
+    _attr_icon = "mdi:rename-box"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "playlist_name")
+
+    @property
+    def native_value(self) -> str:
+        return self.link.playlist_name or ""
+
+    async def async_set_value(self, value: str) -> None:
+        if self.link.playlist_name is None:
+            await self.call(self.link.async_playlist_create(value))
+        else:
+            await self.call(self.link.async_playlist_rename(value))

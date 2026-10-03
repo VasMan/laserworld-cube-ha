@@ -72,7 +72,9 @@ Build your own show from patterns of **any libraries** and choose **how long eac
 the official app's *Equipment playList*. Playlists are saved and survive restarts; you can have several.
 
 **Build one**
-1. Press **New playlist** (it gets the name *Playlist 1*, *2*, …).
+1. Press **New playlist** (it starts as *Playlist 1*, *2*, …), then type your own name in **Playlist name**
+   (up to 40 characters). Editing that field **renames** the active playlist at any time, even while it plays;
+   if you have no playlist yet, typing a name creates one with that name.
 2. Set **Playlist item duration** (seconds the *next* pattern will stay on).
 3. Find a pattern – pick a library and number, or tap it in the library browser card – then press
    **Add to playlist**. Repeat with other libraries and other durations.
@@ -90,6 +92,8 @@ Choose another playlist with the **Playlist** select; **Delete playlist** remove
 
 | Service | What it does |
 |---|---|
+| `laserworld_cube.playlist_create` | Create a playlist with a `name` (default *Playlist N*) and make it active |
+| `laserworld_cube.playlist_rename` | Give a playlist a new `name` (default: the active one) |
 | `laserworld_cube.playlist_add` | Add a pattern: `library` (e.g. `Hotspot`), `pattern`, `duration`, optional `playlist`, `position` |
 | `laserworld_cube.playlist_remove` | Remove item `index` (default: the last) |
 | `laserworld_cube.playlist_set_duration` | Change how long item `index` stays on |

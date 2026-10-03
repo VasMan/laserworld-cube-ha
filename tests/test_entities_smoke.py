@@ -478,3 +478,30 @@ def test_picture_entities_and_show_image_action():
                 pass
             await link.disconnect()
     asyncio.run(go())
+
+
+def test_playlist_name_entity_and_rename_actions():
+    async def go():
+        dev = sim.FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        entry = _entry()
+        await link.async_connect()
+        name = mods["text"].CubePlaylistName(link, entry)
+        sel = mods["select"].CubePlaylistSelect(link, entry)
+        assert name.native_value == "" and sel.options == []
+        await name.async_set_value("Date night")                       # no playlist yet: creates it with this name
+        assert name.native_value == "Date night" and sel.options == ["Date night"] and sel.current_option == "Date night"
+        await name.async_set_value("Dinner party")                     # editing renames the active playlist
+        assert sel.options == ["Dinner party"] and sel.current_option == "Dinner party"
+        await sel.async_service_create("Chill")
+        assert name.native_value == "Chill" and sel.options == ["Dinner party", "Chill"]
+        await sel.async_service_rename("Late night", "Dinner party")
+        assert sel.options == ["Late night", "Chill"] and name.native_value == "Chill"
+        for bad in (lambda: name.async_set_value("  "), lambda: name.async_set_value("late NIGHT"),
+                    lambda: sel.async_service_rename("x", "Nope")):
+            try:
+                await bad(); raise AssertionError("expected HAError")
+            except HAError:
+                pass
+        await link.disconnect()
+    asyncio.run(go())

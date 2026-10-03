@@ -439,6 +439,7 @@ cards:
     title: Playlist
     entities:
       - select.laserworld_cube_847e_playlist
+      - text.laserworld_cube_847e_playlist_name
       - number.laserworld_cube_847e_playlist_item_duration
       - button.laserworld_cube_847e_add_to_playlist
       - switch.laserworld_cube_847e_play_playlist

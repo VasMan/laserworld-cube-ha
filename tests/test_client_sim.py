@@ -986,3 +986,60 @@ def test_picture_errors_do_not_drop_the_link_and_files_load_by_name():
         assert link.content == "picture" and link.picture_name == "logo.png"
         await link.disconnect()
     asyncio.run(go())
+
+
+def test_playlists_can_be_named_and_renamed():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        saved = []
+        link.on_playlists_changed = lambda: saved.append((link.playlist_name, list(link.playlists)))
+        await link.async_connect()
+        await link.async_playlist_create("  Party   night ")             # your own name, whitespace tidied
+        assert link.playlist_name == "Party night"
+        await link.async_playlist_create()                               # default names still work
+        assert link.playlist_name == "Playlist 1"
+        await link.async_playlist_create("Chill")
+        # rename keeps the order, the contents and the active playlist
+        await link.async_playlist_select("Playlist 1")
+        await link.async_playlist_add(library="Hotspot", pattern=3)
+        await link.async_playlist_rename("Morning")
+        assert list(link.playlists) == ["Party night", "Morning", "Chill"]
+        assert link.playlist_name == "Morning" and len(link.playlists["Morning"]) == 1
+        await link.async_playlist_rename("Chill 2", playlist="Chill")    # another one, by name
+        assert list(link.playlists) == ["Party night", "Morning", "Chill 2"] and link.playlist_name == "Morning"
+        await link.async_playlist_rename("MORNING")                      # a different case of its own name is fine
+        assert link.playlist_name == "MORNING"
+        assert saved[-1] == ("MORNING", ["Party night", "MORNING", "Chill 2"])    # persisted
+        # refused: empty, too long, duplicates (any case), unknown playlist
+        for call in (lambda: link.async_playlist_rename("   "), lambda: link.async_playlist_rename("x" * 41),
+                     lambda: link.async_playlist_rename("party NIGHT"), lambda: link.async_playlist_create("chill 2"),
+                     lambda: link.async_playlist_rename("A", playlist="Nope")):
+            try:
+                await call(); raise AssertionError("expected CubeUserError")
+            except c.CubeUserError:
+                pass
+        assert list(link.playlists) == ["Party night", "MORNING", "Chill 2"]       # nothing changed
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_renaming_a_playing_playlist_does_not_stop_it():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_laser(True)
+        await link.async_playlist_add(library="Timetunnel", pattern=1)
+        await link.async_playlist_add(library="Timetunnel", pattern=2)
+        for item in link.current_playlist():
+            item["seconds"] = 0.1
+        await link.async_playlist_play(repeat=True)
+        await asyncio.sleep(0.25)
+        await link.async_playlist_rename("Renamed while playing")
+        n = len(dev.frames)
+        await asyncio.sleep(0.5)
+        assert link.playlist_on and len(dev.frames) > n + 2                 # still cycling
+        assert set(dev.frames[n:]) <= {(1, 1), (1, 2)}
+        await link.async_playlist_stop()
+        await link.disconnect()
+    asyncio.run(go())

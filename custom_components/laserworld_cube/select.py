@@ -88,6 +88,13 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         vol.Optional("playlist"): str,
         vol.Optional("position"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
     }, "async_service_add")
+    platform.async_register_entity_service("playlist_rename", {
+        vol.Required("name"): str,
+        vol.Optional("playlist"): str,
+    }, "async_service_rename")
+    platform.async_register_entity_service("playlist_create", {
+        vol.Optional("name"): str,
+    }, "async_service_create")
     platform.async_register_entity_service("playlist_remove", {
         vol.Optional("index"): vol.All(vol.Coerce(int), vol.Range(min=1, max=999)),
         vol.Optional("playlist"): str,
@@ -227,6 +234,12 @@ class CubePlaylistSelect(CubeEntity, SelectEntity):
 
     async def async_service_add(self, library=None, pattern=None, duration=None, playlist=None, position=None):
         await self.call(self.link.async_playlist_add(library, pattern, duration, playlist, position))
+
+    async def async_service_rename(self, name, playlist=None):
+        await self.call(self.link.async_playlist_rename(name, playlist))
+
+    async def async_service_create(self, name=None):
+        await self.call(self.link.async_playlist_create(name))
 
     async def async_service_remove(self, index=None, playlist=None):
         await self.call(self.link.async_playlist_remove(index, playlist))
