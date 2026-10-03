@@ -61,6 +61,9 @@
       },
       "repeat_playlist": {
         "name": "Repeat playlist"
+      },
+      "invert_picture": {
+        "name": "Invert picture"
       }
     },
     "select": {
@@ -117,6 +120,15 @@
       },
       "playlist": {
         "name": "Playlist"
+      },
+      "picture": {
+        "name": "Picture"
+      },
+      "picture_mode": {
+        "name": "Picture mode"
+      },
+      "picture_color": {
+        "name": "Picture color"
       }
     },
     "number": {
@@ -191,6 +203,12 @@
       },
       "playlist_seconds": {
         "name": "Playlist item duration"
+      },
+      "picture_detail": {
+        "name": "Picture detail"
+      },
+      "picture_size": {
+        "name": "Picture size"
       }
     },
     "button": {
@@ -250,6 +268,12 @@
       },
       "delete_playlist": {
         "name": "Delete playlist"
+      },
+      "show_picture": {
+        "name": "Show picture"
+      },
+      "refresh_pictures": {
+        "name": "Refresh picture list"
       }
     },
     "text": {
@@ -266,6 +290,9 @@
       },
       "playlist_overview": {
         "name": "Playlist overview"
+      },
+      "display_preview": {
+        "name": "Display preview"
       }
     },
     "sensor": {
@@ -408,6 +435,40 @@
         "playlist": {
           "name": "Playlist",
           "description": "Playlist name (default: the active one)."
+        }
+      }
+    },
+    "show_image": {
+      "name": "Show image",
+      "description": "Convert a picture to laser lines (locally, nothing is uploaded) and show it on the laser.",
+      "fields": {
+        "media": {
+          "name": "Media",
+          "description": "A picture from Home Assistant's media (upload via Media > My media)."
+        },
+        "path": {
+          "name": "Path",
+          "description": "Alternatively a file path (/media/..., /local/...) or a URL."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Outline (edges), Silhouette (shapes) or Lines (single centre lines)."
+        },
+        "detail": {
+          "name": "Detail",
+          "description": "1-100: how many lines and points to keep."
+        },
+        "color": {
+          "name": "Color",
+          "description": "Colors from the picture, a single color, or rainbow."
+        },
+        "size": {
+          "name": "Size",
+          "description": "10-100 % of the laser's frame."
+        },
+        "invert": {
+          "name": "Invert",
+          "description": "Use light picture parts as the drawing (for light-on-dark pictures)."
         }
       }
     }

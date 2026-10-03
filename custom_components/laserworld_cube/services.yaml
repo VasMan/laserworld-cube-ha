@@ -184,3 +184,55 @@ playlist_move:
     playlist:
       selector:
         text:
+
+show_image:
+  target:
+    entity:
+      integration: laserworld_cube
+      domain: text
+  fields:
+    media:
+      selector:
+        media:
+          accept:
+            - image/*
+    path:
+      example: /media/logo.png
+      selector:
+        text:
+    mode:
+      selector:
+        select:
+          options:
+            - outline
+            - silhouette
+            - lines
+    detail:
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: slider
+    color:
+      selector:
+        select:
+          options:
+            - original
+            - white
+            - red
+            - yellow
+            - green
+            - cyan
+            - blue
+            - purple
+            - rainbow
+    size:
+      selector:
+        number:
+          min: 10
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+    invert:
+      selector:
+        boolean:

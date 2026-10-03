@@ -45,6 +45,10 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         CubeHwSpeed(link, entry),
         CubeOverviewPage(link, entry),
         CubePlaylistSeconds(link, entry),
+        CubePictureNumber(link, entry, "picture_detail", "mdi:blur", 1, 100, None,
+                          lambda l: l.picture_detail, lambda l, v: l.async_set_picture_options(detail=v)),
+        CubePictureNumber(link, entry, "picture_size", "mdi:image-size-select-large", 10, 100, "%",
+                          lambda l: l.picture_size, lambda l, v: l.async_set_picture_options(size=v)),
         *(CubeSettingNumber(link, entry, d) for d in SETTING_NUMBERS),
     ])
 
@@ -286,3 +290,25 @@ class CubePlaylistSeconds(CubeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.call(self.link.async_set_playlist_seconds(value))
+
+
+class CubePictureNumber(CubeEntity, NumberEntity):
+    """Picture detail (how many lines/points) and size; changing it updates a shown picture."""
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_step = 1
+
+    def __init__(self, link, entry, key: str, icon: str, lo: int, hi: int, unit, getter, setter) -> None:
+        super().__init__(link, entry, key)
+        self._attr_translation_key = key
+        self._attr_icon = icon
+        self._attr_native_min_value = lo
+        self._attr_native_max_value = hi
+        self._attr_native_unit_of_measurement = unit
+        self._get, self._set = getter, setter
+
+    @property
+    def native_value(self) -> float:
+        return self._get(self.link)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.call(self._set(self.link, int(value)))

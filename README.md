@@ -196,6 +196,56 @@ Other notes: the text uses a built-in single-line font (A–Z, a–z, digits, co
 are dropped). At 100 % text fills the full width. Text needs the laser's point data format 3 or 4 (the
 normal one); an error tells you if yours differs.
 
+## Showing pictures
+Pick a picture and the laser draws it, like the official app's *Draw → picture* tool.
+
+**Privacy:** the app uploads the picture to the manufacturer's cloud (and needs your login) to convert it.
+This integration converts it **locally inside Home Assistant** – nothing leaves your network.
+
+**1. Get a picture into Home Assistant**
+* In the sidebar open **Media → My media**, and use **Upload** (any folder; a folder called
+  `laserworld_cube` keeps them tidy), **or** copy files to your `media` folder (or `www`).
+* Press **Refresh picture list** (diagnostic section) – the **Picture** select lists the pictures it finds.
+
+**2. Show it**: choose it in the **Picture** select. The laser draws it right away, and **Display preview**
+(image) shows exactly what is being drawn. Other ways: **Show picture** (button, re-converts the last one) or
+the `laserworld_cube.show_image` action (below), which can also take a picture straight from the media browser.
+
+**3. Tune it** – changing any of these updates a picture that is showing:
+
+| Control | What it does |
+|---|---|
+| Picture mode | **Outline** (edges – photos, line art), **Silhouette** (outlines of solid shapes – logos, icons), **Lines** (single centre lines – drawings, handwriting, text) |
+| Picture color | **Original colors** (nearest laser color per line), one color, or **Rainbow** |
+| Picture detail | 1–100: how many lines and points are kept (the laser's own point limit is respected) |
+| Picture size | 10–100 % of the laser's frame |
+| Invert picture | For light-on-dark pictures (white logo on black) |
+
+Tips: logos and icons → *Silhouette*; photos → *Outline* with higher detail; drawings → *Lines*. Transparent
+PNGs work best (the shape is taken from the transparency). The picture becomes **lines**, not a filled image –
+that is what a laser can draw. If nothing is found you get a message to try another mode or *Invert*.
+Pictures up to 15 MB are accepted (PNG, JPEG, GIF – first frame, BMP, WebP). **Clear text** removes a picture too.
+
+**Action** (Developer tools → Actions, target the *Text* entity):
+
+```yaml
+action: laserworld_cube.show_image
+target:
+  entity_id: text.laserworld_cube_847e_text
+data:
+  media:
+    media_content_id: media-source://media_source/local/logo.png
+    media_content_type: image/png
+  mode: silhouette
+  color: original
+  detail: 60
+  size: 80
+```
+Instead of `media` you can give `path` (e.g. `/media/logo.png`, `/local/logo.png`) or a web URL.
+Files must be in a folder Home Assistant may read (the media folder always is).
+`dashboard/picture.yaml` is a ready-made card (add it like the other cards).
+Hardware effects (rotate, zoom, …) and the software effects also work on pictures.
+
 ## Device settings (the app's "Laser device settings")
 These are the laser's **saved** settings, found in the *Configuration* section of the device page. They
 change the laser permanently (like the app does), not just the current show:
@@ -233,6 +283,7 @@ or changing *Scanning speed* is your responsibility.
 | Software effect, Software effect speed | Stepwise motion effects driven from Home Assistant (scroll, bounce, rotate, pulse) |
 | Hardware effect, Hardware effect speed, Hardware effect layout | Smooth laser-side effects for text (rotate, move, zoom, waves, color flow, gradual drawing) |
 | DMX channel counts (sensor) | The laser's standard / professional / scene channel counts (diagnostic) |
+| Picture, Picture mode / color / detail / size, Invert picture, Show picture, Refresh picture list, Display preview (image) | Show a picture (converted locally) on the laser |
 | Playlist, New / Delete playlist, Add to playlist, Remove last item, Clear playlist, Playlist item duration, Play playlist, Repeat playlist, Playlist overview (image), Playlist summary (sensor) | Playlists of patterns from any library, each with its own on-time |
 | Overview page, Overview previous / next page | Browse libraries with more than 20 patterns |
 | DMX address/mode, Functional mode, Scanning speed, Device size/position, Invert/Swap, Color setting, Master, Safety, … | Saved device settings (Configuration) |
@@ -253,7 +304,7 @@ Requires the *Pillow* image library (Home Assistant installs it automatically if
 not stored in the laser, so Loop play uses one fixed interval instead.
 
 ## Not (yet) supported
-Saving a playlist into the laser (*Offline play*), drawing and image playback, the app's own cloud-defined effects, *Program*, DMX channel
+Saving a playlist into the laser (*Offline play*), the interactive *Draw* editor (shapes, freehand), the app's own cloud-defined effects, *Program*, DMX channel
 console, device setup (invert, scan rate persistence), activation, binding management.
 
 ## Troubleshooting

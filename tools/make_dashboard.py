@@ -121,10 +121,37 @@ def build_playlist(slug: str = "laserworld_cube_847e") -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_picture(slug: str = "laserworld_cube_847e") -> str:
+    """A card for showing pictures on the laser."""
+    lines = [
+        "# Picture card for the Laserworld Cube integration.",
+        "# Dashboard > Edit > Add card > Manual, then paste this.",
+        "type: vertical-stack",
+        "cards:",
+        "  - type: picture-entity",
+        f"    entity: image.{slug}_display_preview",
+        "    show_name: false",
+        "    show_state: false",
+        "  - type: entities",
+        "    entities:",
+        f"      - select.{slug}_picture",
+        f"      - select.{slug}_picture_mode",
+        f"      - select.{slug}_picture_color",
+        f"      - number.{slug}_picture_detail",
+        f"      - number.{slug}_picture_size",
+        f"      - switch.{slug}_invert_picture",
+        f"      - button.{slug}_show_picture",
+        f"      - button.{slug}_clear_text",
+        f"      - button.{slug}_refresh_picture_list",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 if __name__ == "__main__":
     slug = sys.argv[1] if len(sys.argv) > 1 else "laserworld_cube_847e"
     out = ROOT / "dashboard" / "library_browser.yaml"
     out.write_text(build(slug))
     out2 = ROOT / "dashboard" / "playlist.yaml"
     out2.write_text(build_playlist(slug))
+    (ROOT / "dashboard" / "picture.yaml").write_text(build_picture(slug))
     print(f"wrote {out} ({TILES} tiles + 2 page controls) and {out2}")

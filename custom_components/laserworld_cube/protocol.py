@@ -119,6 +119,10 @@ DEVICE_SETTING_LIMITS: dict[str, tuple[int, int]] = {
     "deviceRedMax": (0, 100), "deviceGreenMax": (0, 100), "deviceBlueMax": (0, 100),
 }
 RAINBOW = (2, 3, 4, 5, 6, 7)
+# pictures: how they are converted to lines, and how they are coloured
+PICTURE_MODES = {0: "Outline", 1: "Silhouette", 2: "Lines"}
+PICTURE_COLORS = {0: "Original colors", 1: "White", 2: "Red", 3: "Yellow", 4: "Green", 5: "Cyan",
+                  6: "Blue", 7: "Purple", 8: "Rainbow"}
 # client-side play modes of the official app
 LOOP_MODES = {0: "Loop", 1: "Random", 2: "Sequence", 3: "Single"}
 

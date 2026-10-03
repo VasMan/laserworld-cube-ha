@@ -10,7 +10,7 @@ from .entity import CubeEntity
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
     async_add_entities([CubeLaserSwitch(link, entry), CubeLoopSwitch(link, entry),
-                        CubePlaylistSwitch(link, entry), CubePlaylistRepeat(link, entry),
+                        CubePlaylistSwitch(link, entry), CubePlaylistRepeat(link, entry), CubeInvertPicture(link, entry),
                         *(CubeSettingSwitch(link, entry, *d) for d in SETTING_SWITCHES)])
 
 
@@ -129,3 +129,22 @@ class CubePlaylistRepeat(CubeEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.call(self.link.async_set_playlist_repeat(False))
+
+
+class CubeInvertPicture(CubeEntity, SwitchEntity):
+    """Treat light picture parts as the drawing (for light-on-dark pictures)."""
+    _attr_translation_key = "invert_picture"
+    _attr_icon = "mdi:invert-colors"
+
+    def __init__(self, link, entry) -> None:
+        super().__init__(link, entry, "invert_picture")
+
+    @property
+    def is_on(self) -> bool:
+        return self.link.picture_invert
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.call(self.link.async_set_picture_options(invert=True))
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.call(self.link.async_set_picture_options(invert=False))

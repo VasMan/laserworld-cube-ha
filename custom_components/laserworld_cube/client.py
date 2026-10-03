@@ -6,6 +6,7 @@ Deliberately free of Home Assistant imports. The caller supplies a coroutine
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import math
 import random
@@ -13,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import protocol as p
-from . import stroke_font
+from . import stroke_font, vectorize
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,7 +94,8 @@ class CubeLink:
         self.text = "Alexandros"
         self.text_color = 8                # Rainbow
         self.text_size = 100
-        self.text_active = False
+        self.content: str | None = None          # what real-time content is showing: "text" / "picture"
+        self.content_preview: list[int] | None = None   # flat points of it, for the preview image
         self.text_orientation = 0
         self.text_reverse = False
         # raw effect channel values sent with the text (experimental, see send_effect service)
@@ -103,7 +105,20 @@ class CubeLink:
         self.hw_speed = 60
         self.hw_layout = 0
         self.text_flow_set = False          # we switched the laser's colour flow on for text
-        self._text_box: tuple[float, float] | None = None
+        self._content_box: tuple[float, float] | None = None
+        self._content_size = 100
+        # picture (converted locally from an image file)
+        self.picture_data: bytes | None = None
+        self.picture_name: str | None = None
+        self.picture_mode = 0                   # 0 outline, 1 silhouette, 2 lines
+        self.picture_color = 0                  # 0 original, 1-7 single laser colour, 8 rainbow
+        self.picture_detail = 50
+        self.picture_size = 100
+        self.picture_invert = False
+        self.picture_notes = ""
+        self.picture_files: dict[str, str] = {}                 # label -> path (filled by Home Assistant)
+        self.picture_loader: Callable[[str], Awaitable[bytes]] | None = None
+        self.refresh_pictures: Callable[[], Awaitable[None]] | None = None
         # motion effects driven from here (position / rotation / size of the output)
         self.effect = 0
         self.effect_speed = 50
@@ -119,6 +134,11 @@ class CubeLink:
         self.on_playlists_changed: Callable[[], None] | None = None
         self.playlist_store: Any = None
         self._playlist_task: asyncio.Task | None = None
+
+    @property
+    def text_active(self) -> bool:
+        """True while any real-time content (text or a picture) is showing."""
+        return self.content is not None
 
     # ------------------------------------------------------------ listeners
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -454,7 +474,7 @@ class CubeLink:
         self.play_state = p.PLAY_STATE_PLAY
         self.pattern_index = n
         self.overview_page = None
-        self.text_active = False
+        self.content = None
         self._notify()
 
     async def async_step(self, delta: int) -> None:
@@ -478,7 +498,7 @@ class CubeLink:
     async def async_stop(self) -> None:
         self._cancel_loop()
         self._cancel_playlist()
-        self.text_active = False
+        self.content = None
         await self.async_set_play_state(p.PLAY_STATE_STOP)
 
     async def async_play(self) -> None:
@@ -691,7 +711,7 @@ class CubeLink:
             self._thumbs_changed()
 
     # -------------------------------------------------------------------- text
-    def _text_frames(self, text: str, fmt: int) -> list[list[p.Path]]:
+    def _text_paths(self, text: str) -> list[p.Path]:
         strokes = stroke_font.layout(text[::-1] if self.text_reverse else text,
                                      vertical=self.text_orientation == 1)
         if not strokes:
@@ -706,15 +726,32 @@ class CubeLink:
             else:
                 rgb = palette[self.text_color]
             paths.append([(x, y, rgb) for x, y in stroke])
+        return paths
+
+    def _fit_frames(self, paths: list[p.Path], size_percent: int) -> list[list[p.Path]]:
+        """Fit paths (local coordinates) into the laser's square, centred, at ``size_percent``."""
+        minx = min(x for path in paths for x, _, _ in path)
+        miny = min(y for path in paths for _, y, _ in path)
+        paths = [[(x - minx, y - miny, rgb) for x, y, rgb in path] for path in paths]   # content to the origin
         w = max(x for path in paths for x, _, _ in path)
         h = max(y for path in paths for _, y, _ in path)
         w, h = max(w, 0.5), max(h, 0.5)
-        self._text_box = (w, h)
-        scale = max(0.1, min(1.0, self.text_size / 100))
-        vw, vh = w / scale, h / scale                 # virtual canvas the text sits centred in
+        self._content_box = (w, h)
+        self._content_size = size_percent
+        scale = max(0.1, min(1.0, size_percent / 100))
+        vw, vh = w / scale, h / scale                 # virtual canvas the content sits centred in
         sx, sy = (vw - w) / 2, (vh - h) / 2
         paths = [[(x + sx, y + sy, rgb) for x, y, rgb in path] for path in paths]
         return [p.normalize_frame(paths, vw, vh)]
+
+    @staticmethod
+    def _preview_flat(frames: list[list[p.Path]]) -> list[int]:
+        flat: list[int] = []
+        for path in frames[0]:
+            for i, (x, y, rgb) in enumerate(path):
+                flat += [round(x * 254 / 65535), round(y * 254 / 65535), 64 if i == 0 else 0,
+                         (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]]
+        return flat
 
     async def _transfer_stream(self, packets: list[bytes]) -> None:
         """Send a multi-packet transfer, one reply per packet."""
@@ -737,22 +774,27 @@ class CubeLink:
         message = self.text.strip("\n")
         if not message.strip():
             raise CubeUserError("Enter some text first")
+        await self._show(self._text_paths(message), self.text_size, content="text",
+                         flow=self.text_color == 9, label="Text")
 
+    async def _show(self, paths: list[p.Path], size_percent: int, *, content: str, flow: bool,
+                    label: str) -> None:
+        """Send real-time content (text or a picture): optional effect first, then the points."""
         async def op() -> dict[str, int] | None:
             fmt = self.info.data_format
             if fmt not in (3, 4):
                 raise CubeUserError(
-                    f"This laser uses point data format {fmt}; text playback supports 3 and 4")
-            frames = self._text_frames(message, fmt)
+                    f"This laser uses point data format {fmt}; {label.lower()} playback supports 3 and 4")
+            frames = self._fit_frames(paths, size_percent)
             count = sum(len(path) for frame in frames for path in frame)
             limit = p.max_points(self.info.scene_max, fmt) if self.info.scene_max else 2000
             if count > limit:
-                raise CubeUserError(f"Text too long ({count} points, the laser accepts {limit})")
+                raise CubeUserError(f"{label} too complex ({count} points, the laser accepts {limit})")
             data = p.encode_frames(frames, fmt)
             buffer_max = self.info.buffer_max or 244
             packets = p.split_transfer(p.FUNC_REAL_TIME_PLAY, p.ACT_PLAY_START, data, buffer_max,
                                        data_format=fmt, layers=len(frames), frame=0)
-            _LOGGER.debug("text %r: %d points, %d bytes, %d packets", message, count, len(data), len(packets))
+            _LOGGER.debug("%s: %d points, %d bytes, %d packets", label, count, len(data), len(packets))
             await self._transfer(p.FUNC_MY_DEVICE, p.ACT_ENABLE_LASER_OUTPUT,
                                  p.build_enable_payload(self.laser_on, p.RUN_MODE_APP,
                                                         p.PLAY_STATE_PLAY))
@@ -760,14 +802,15 @@ class CubeLink:
                 eff = self.text_effect
                 payload = p.build_play_effect(eff["step"], int(eff["duration"] * 1000),
                                               eff["channels"], self.info.protocols)
-                _LOGGER.debug("text effect: %s", payload.hex())
+                _LOGGER.debug("effect: %s", payload.hex())
                 await self._transfer_stream(p.split_transfer(
                     p.FUNC_REAL_TIME_PLAY, p.ACT_PLAY_EFFECT, payload, buffer_max,
                     data_format=fmt, layers=0, frame=eff["steps"]))
             await self._transfer_stream(packets)
-            # "Color flow" text uses the laser's colour-flow mode; leave it again otherwise
-            if self.text_color == 9 or self.text_flow_set:
-                mode = self.flow_precision if self.text_color == 9 else 0
+            self.content_preview = self._preview_flat(frames)
+            # "Color flow" uses the laser's colour-flow mode; leave it again otherwise
+            if flow or self.text_flow_set:
+                mode = self.flow_precision if flow else 0
                 params = {**self.run_params, "runParaColorMode": mode}
                 await self._transfer(p.FUNC_MY_DEVICE, p.ACT_SET_RUN_PARAMETERS,
                                      p.build_run_params(params))
@@ -779,10 +822,17 @@ class CubeLink:
             self.text_flow_set = params["runParaColorMode"] != 0
         self.run_mode = p.RUN_MODE_APP
         self.play_state = p.PLAY_STATE_PLAY
-        self.text_active = True
+        self.content = content
         self._cancel_loop()
         self._cancel_playlist()
         self._notify()
+
+    async def _replay_content(self) -> None:
+        """Send the current real-time content again (e.g. after the effect changed)."""
+        if self.content == "picture" and self.picture_data:
+            await self.async_show_picture()
+        else:
+            await self.async_play_text()
 
     async def async_send_effect(self, channels: list[int], step: int = 0, steps: int = 1,
                                 duration: float = 5.0) -> None:
@@ -801,20 +851,21 @@ class CubeLink:
                 raise CubeUserError("channels must be at most 64 values, each 0-255")
             self.text_effect = {"channels": [int(v) for v in channels], "step": int(step),
                                 "steps": max(1, int(steps)), "duration": max(0.05, float(duration))}
-        await self.async_play_text()
+        await self._replay_content()
 
     async def async_clear_text(self) -> None:
         async def op() -> None:
             await self._transfer(p.FUNC_REAL_TIME_PLAY, p.ACT_CLEAR_PLAY_DATA, None)
         await self._run(op)
-        self.text_active = False
+        self.content = None
+        self.content_preview = None
         self._notify()
 
     async def async_set_text_color(self, index: int) -> None:
         if index not in p.TEXT_COLORS:
             raise ValueError("invalid text colour")
         self.text_color = index
-        if self.text_active:
+        if self.content == "text":
             await self.async_play_text()
         else:
             self._notify()
@@ -832,14 +883,14 @@ class CubeLink:
         await self._replay_text()
 
     async def _replay_text(self) -> None:
-        if self.text_active:
+        if self.content == "text":
             await self.async_play_text()
         else:
             self._notify()
 
     async def async_set_text_size(self, percent: float) -> None:
         self.text_size = int(max(10, min(100, percent)))
-        if self.text_active:
+        if self.content == "text":
             await self.async_play_text()
         else:
             self._notify()
@@ -910,9 +961,9 @@ class CubeLink:
         """Width/height of what is shown, as a fraction of the laser's field."""
         sx = self.run_params["runsizeX"] / 100
         sy = self.run_params["runsizeY"] / 100
-        if self.text_active and self._text_box:
-            w, h = self._text_box
-            k = self.text_size / 100 / max(w, h)
+        if self.text_active and self._content_box:
+            w, h = self._content_box
+            k = self._content_size / 100 / max(w, h)
             return sx * k * w, sy * k * h
         return sx, sy
 
@@ -1034,7 +1085,7 @@ class CubeLink:
         self.hw_effect = effect
         try:
             self._apply_hw_effect()
-            await self.async_play_text()
+            await self._replay_content()
         except Exception:
             self.hw_effect, self.text_effect = previous
             raise
@@ -1245,3 +1296,76 @@ class CubeLink:
                 self.playlist_on = False
                 self._arm_idle()
                 self._notify()
+
+    # ------------------------------------------------------------------ pictures
+    def _device_point_limit(self) -> int:
+        fmt = self.info.data_format if self.info.data_format in (3, 4) else 3
+        return p.max_points(self.info.scene_max, fmt) if self.info.scene_max else 1685
+
+    async def async_show_picture(self, data: bytes | None = None, name: str | None = None, *,
+                                 mode: int | None = None, detail: int | None = None,
+                                 color: int | None = None, size: int | None = None,
+                                 invert: bool | None = None) -> None:
+        """Convert a picture to laser lines (locally) and show it.
+
+        ``data`` is the image file; without it the last picture is converted again
+        with the current settings. Options given here are kept as the new settings.
+        """
+        if mode is not None and mode in p.PICTURE_MODES:
+            self.picture_mode = mode
+        if color is not None and color in p.PICTURE_COLORS:
+            self.picture_color = color
+        if detail is not None:
+            self.picture_detail = int(min(100, max(1, detail)))
+        if size is not None:
+            self.picture_size = int(min(100, max(10, size)))
+        if invert is not None:
+            self.picture_invert = bool(invert)
+        if data is not None:
+            self.picture_data = bytes(data)
+            self.picture_name = name or "picture"
+        if not self.picture_data:
+            raise CubeUserError("Choose a picture first")
+        budget = max(100, min(self._device_point_limit(), 150 + 10 * self.picture_detail))
+        job = functools.partial(
+            vectorize.vectorize, self.picture_data, mode=("outline", "silhouette", "lines")[self.picture_mode],
+            detail=self.picture_detail, invert=self.picture_invert, color=self.picture_color,
+            max_points=budget)
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, job)
+        except ValueError as err:
+            raise CubeUserError(str(err)) from err
+        self.picture_notes = f"{len(result.paths)} lines, {result.points} points" + (
+            f" ({', '.join(result.notes)})" if result.notes else "")
+        _LOGGER.debug("picture %s: %s", self.picture_name, self.picture_notes)
+        paths = [[(x, y, rgb) for x, y in path] for path, rgb in zip(result.paths, result.colors)]
+        await self._show(paths, self.picture_size, content="picture", flow=False, label="Picture")
+
+    async def async_show_picture_file(self, label: str) -> None:
+        """Load a picture by name through Home Assistant's file access, then show it."""
+        if self.picture_loader is None:
+            raise CubeUserError("Picture loading is not available")
+        data = await self.picture_loader(label)
+        await self.async_show_picture(data, label)
+
+    async def async_set_picture_options(self, *, mode: int | None = None, detail: int | None = None,
+                                        color: int | None = None, size: int | None = None,
+                                        invert: bool | None = None) -> None:
+        if mode is not None:
+            if mode not in p.PICTURE_MODES:
+                raise ValueError("invalid picture mode")
+            self.picture_mode = mode
+        if color is not None:
+            if color not in p.PICTURE_COLORS:
+                raise ValueError("invalid picture colour")
+            self.picture_color = color
+        if detail is not None:
+            self.picture_detail = int(min(100, max(1, detail)))
+        if size is not None:
+            self.picture_size = int(min(100, max(10, size)))
+        if invert is not None:
+            self.picture_invert = bool(invert)
+        if self.content == "picture" and self.picture_data:
+            await self.async_show_picture()
+        else:
+            self._notify()

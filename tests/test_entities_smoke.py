@@ -55,7 +55,7 @@ spec = importlib.util.spec_from_file_location("custom_components.laserworld_cube
                                               submodule_search_locations=[str(ROOT / "laserworld_cube")])
 top = importlib.util.module_from_spec(spec); sys.modules[spec.name] = top; spec.loader.exec_module(top)
 mods = {n: importlib.import_module(f"custom_components.laserworld_cube.{n}")
-        for n in ("config_flow", "switch", "select", "number", "button", "text", "image", "sensor")}
+        for n in ("config_flow", "switch", "select", "number", "button", "text", "image", "sensor", "media")}
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import test_client_sim as sim   # reuses the simulated device
@@ -363,4 +363,118 @@ def test_playlist_entities_services_and_persistence_hook():
             except HAError:
                 pass
         await link.disconnect()
+    asyncio.run(go())
+
+
+def _image_bytes(kind="logo"):
+    import io as _io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (400, 300), "white")
+    d = ImageDraw.Draw(im)
+    d.ellipse([60, 40, 200, 180], fill=(220, 30, 30)); d.rectangle([230, 60, 350, 170], fill=(30, 60, 220))
+    b = _io.BytesIO(); im.save(b, "PNG"); return b.getvalue()
+
+
+def _fake_hass(root):
+    import os
+    async def _exec(fn, *a):
+        return fn(*a)
+    cfg = types.SimpleNamespace(path=lambda *a: os.path.join(root, *a), media_dirs={"local": os.path.join(root, "media")},
+                                is_allowed_path=lambda p: p.startswith(root))
+    return types.SimpleNamespace(config=cfg, async_add_executor_job=_exec)
+
+
+def test_media_scanning_reading_and_path_safety():
+    import os, tempfile
+    media = mods["media"]
+    async def go():
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "media", "laserworld_cube")); os.makedirs(os.path.join(root, "www"))
+            for rel in ("media/logo.png", "media/laserworld_cube/star.png", "www/sign.png", "media/song.mp3", "media/notes.txt"):
+                open(os.path.join(root, rel), "wb").write(_image_bytes() if rel.endswith(".png") else b"x")
+            hass = _fake_hass(root)
+            found = await media.async_scan(hass)
+            assert sorted(found) == ["laserworld_cube/star.png", "logo.png", "sign.png"]       # images only
+            assert (await media.async_read_file(hass, found["logo.png"]))[:4] == b"\x89PNG"
+            # a path outside the allowed folders is refused, as is a missing file
+            for bad in ("/etc/passwd", os.path.join(root, "media", "nope.png")):
+                try:
+                    await media.async_read_file(hass, bad); raise AssertionError(bad)
+                except HAError:
+                    pass
+            data, name = await media.async_read_image(hass, "/local/sign.png")             # /local -> <config>/www
+            assert name == "sign.png" and data[:4] == b"\x89PNG"
+            data, name = await media.async_read_image(hass, "media/logo.png")              # relative to the config dir
+            assert name == "logo.png"
+            # a Home Assistant media-source item that resolves to a local file
+            async def resolve(_hass, uri, _w):
+                return types.SimpleNamespace(path=os.path.join(root, "media", "logo.png"), url="/x")
+            sys.modules["homeassistant.components"].media_source = types.SimpleNamespace(async_resolve_media=resolve)
+            data, name = await media.async_read_image(hass, "media-source://media_source/local/logo.png")
+            assert name == "logo.png" and data[:4] == b"\x89PNG"
+            # duplicate names from two media folders get distinct labels
+            os.makedirs(os.path.join(root, "m2")); open(os.path.join(root, "m2", "logo.png"), "wb").write(_image_bytes())
+            two = media.scan_dirs([os.path.join(root, "media"), os.path.join(root, "m2")])
+            assert len([k for k in two if k.startswith("logo.png")]) == 2
+    asyncio.run(go())
+
+
+def test_picture_entities_and_show_image_action():
+    import os, tempfile
+    media = mods["media"]
+    async def go():
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "media"))
+            open(os.path.join(root, "media", "logo.png"), "wb").write(_image_bytes())
+            hass = _fake_hass(root)
+            dev = sim.FakeDevice()
+            link = make_link(dev, idle_timeout=0)
+            entry = _entry()
+            await link.async_connect()
+            link.picture_files = await media.async_scan(hass)
+            link.picture_loader = media.make_picture_loader(hass, link)      # the real loader
+            sel = mods["select"].CubePictureSelect(link, entry)
+            assert sel.options == ["logo.png"] and sel.current_option is None
+            await sel.async_select_option("logo.png")                         # choosing shows it
+            assert link.content == "picture" and sel.current_option == "logo.png" and dev.realtime
+            ctl = {d.key: mods["select"].CubeSelect(link, entry, d) for d in mods["select"].SELECTS}
+            n = len(dev.realtime)
+            await ctl["picture_mode"].async_select_option("Silhouette")
+            await ctl["picture_color"].async_select_option("Rainbow")
+            assert link.picture_mode == 1 and link.picture_color == 8 and len(dev.realtime) == n + 2
+            det = mods["number"].CubePictureNumber(link, entry, "picture_detail", "i", 1, 100, None,
+                                                   lambda l: l.picture_detail, lambda l, v: l.async_set_picture_options(detail=v))
+            await det.async_set_native_value(80); assert det.native_value == 80 and len(dev.realtime) == n + 3
+            inv = mods["switch"].CubeInvertPicture(link, entry)
+            await inv.async_turn_on(); assert inv.is_on and link.picture_invert
+            await inv.async_turn_off()
+            btn = mods["button"].CubePlayButton(link, entry, "show_picture", "i", lambda l: l.async_show_picture())
+            await btn.async_press()
+            async def _exec(fn):
+                return fn()
+            prev = mods["image"].CubeDisplayPreview(types.SimpleNamespace(async_add_executor_job=_exec), link, entry)
+            prev.hass = types.SimpleNamespace(async_add_executor_job=_exec)
+            assert (await prev.async_image()).startswith(b"\x89PNG") and "logo.png" in str(prev._signature())
+            # the show_image action: by path, and by a Home Assistant media item
+            txt = mods["text"].CubeTextMessage(link, entry)
+            txt.hass = hass
+            n = len(dev.realtime)
+            await txt.async_show_image(path=os.path.join(root, "media", "logo.png"), mode="outline", detail=60, color="red", size=70, invert=False)
+            assert len(dev.realtime) == n + 1 and (link.picture_mode, link.picture_color, link.picture_detail, link.picture_size) == (0, 2, 60, 70)
+            async def resolve(_h, uri, _w):
+                return types.SimpleNamespace(path=os.path.join(root, "media", "logo.png"), url="/x")
+            sys.modules["homeassistant.components"].media_source = types.SimpleNamespace(async_resolve_media=resolve)
+            await txt.async_show_image(media={"media_content_id": "media-source://media_source/local/logo.png", "media_content_type": "image/png"})
+            assert len(dev.realtime) == n + 2
+            for bad in ({}, {"path": "/etc/passwd"}, {"path": os.path.join(root, "missing.png")}):
+                try:
+                    await txt.async_show_image(**bad); raise AssertionError(bad)
+                except HAError:
+                    pass
+            link.picture_files = {}
+            try:
+                await sel.async_select_option("gone.png"); raise AssertionError("expected HAError")
+            except HAError:
+                pass
+            await link.disconnect()
     asyncio.run(go())

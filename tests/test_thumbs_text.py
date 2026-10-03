@@ -113,5 +113,6 @@ def test_playlist_render_and_dashboard_files():
     mk = iu.module_from_spec(spec); sys.modules["mk2"] = mk; spec.loader.exec_module(mk)
     dash = ROOT.parent.parent / "dashboard"
     assert (dash / "playlist.yaml").read_text() == mk.build_playlist("laserworld_cube_847e")
+    assert (dash / "picture.yaml").read_text() == mk.build_picture("laserworld_cube_847e")
     browser = (dash / "library_browser.yaml").read_text()
     assert browser.count("hold_action:") == 20 and browser.count("playlist_add_tile") == 20   # long-press adds to the playlist

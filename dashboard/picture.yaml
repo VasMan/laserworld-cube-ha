@@ -1,0 +1,19 @@
+# Picture card for the Laserworld Cube integration.
+# Dashboard > Edit > Add card > Manual, then paste this.
+type: vertical-stack
+cards:
+  - type: picture-entity
+    entity: image.laserworld_cube_847e_display_preview
+    show_name: false
+    show_state: false
+  - type: entities
+    entities:
+      - select.laserworld_cube_847e_picture
+      - select.laserworld_cube_847e_picture_mode
+      - select.laserworld_cube_847e_picture_color
+      - number.laserworld_cube_847e_picture_detail
+      - number.laserworld_cube_847e_picture_size
+      - switch.laserworld_cube_847e_invert_picture
+      - button.laserworld_cube_847e_show_picture
+      - button.laserworld_cube_847e_clear_text
+      - button.laserworld_cube_847e_refresh_picture_list

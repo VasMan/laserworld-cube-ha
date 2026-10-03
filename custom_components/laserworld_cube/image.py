@@ -16,7 +16,7 @@ PAGE = protocol.OVERVIEW_PAGE  # patterns per overview sheet (5 x 4)
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     link = entry.runtime_data
     async_add_entities([CubePatternPreview(hass, link, entry), CubeLibraryOverview(hass, link, entry),
-                        CubePlaylistOverview(hass, link, entry)])
+                        CubePlaylistOverview(hass, link, entry), CubeDisplayPreview(hass, link, entry)])
     # services used by dashboard cards (see dashboard/library_browser.yaml)
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
@@ -165,3 +165,21 @@ class CubePlaylistOverview(_CubeImage):
             + ("  (playing)" if self.link.playlist_on else ""))
         return thumbs.render_playlist(entries, self.link.playlist_index if self.link.playlist_on else None,
                                       title=title)
+
+
+class CubeDisplayPreview(_CubeImage):
+    """What the laser is drawing right now when it shows text or a picture."""
+
+    def __init__(self, hass, link, entry) -> None:
+        super().__init__(hass, link, entry, "display_preview")
+
+    def _signature(self):
+        flat = self.link.content_preview
+        return (self.link.content, len(flat) if flat else 0, self.link.picture_name, self.link.text)
+
+    def _render(self) -> bytes:
+        link = self.link
+        if not link.content or not link.content_preview:
+            return thumbs.render_pattern(None, 320, "Nothing showing")
+        label = f"Picture: {link.picture_name}" if link.content == "picture" else f"Text: {link.text[:24]}"
+        return thumbs.render_pattern(link.content_preview, 320, label)

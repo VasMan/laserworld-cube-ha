@@ -888,3 +888,101 @@ def test_playlist_edits_apply_live_missing_items_are_skipped_and_cancellation():
         except c.CubeUserError:
             pass
     asyncio.run(go())
+
+
+def _png(draw_fn, size=(400, 300)):
+    import io as _io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", size, "white")
+    draw_fn(ImageDraw.Draw(im))
+    b = _io.BytesIO(); im.save(b, "PNG"); return b.getvalue()
+
+
+def _logo():
+    def draw(d):
+        d.ellipse([60, 40, 200, 180], fill=(220, 30, 30)); d.rectangle([230, 60, 350, 170], fill=(30, 60, 220))
+        d.polygon([(100, 280), (170, 200), (240, 280)], fill=(30, 170, 60))
+    return _png(draw)
+
+
+def test_picture_is_converted_locally_and_streamed():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_set_laser(True)
+        await link.async_set_picture_options(mode=1, color=0)               # silhouette, colours from the picture
+        await link.async_show_picture(_logo(), "logo.png")
+        assert link.content == "picture" and link.text_active and link.picture_name == "logo.png"
+        layers, frame, data = dev.realtime[-1]
+        pts = _decode_points(data)
+        assert layers == 1 and 15 < len(pts) <= 661                          # within what the laser accepts
+        assert pts[0][2] & 64 and pts[-1][2] & 128
+        assert {c_ for *_, c_ in pts} == {2, 6, 4}                           # red, blue and green from the picture
+        assert link.content_preview and len(link.content_preview) == 4 * len(pts)
+        assert "lines" in link.picture_notes
+        # fits the square, centred
+        xs = [x for x, *_ in pts]; ys = [y for _, y, *_ in pts]
+        assert min(xs) == 0 and max(xs) == 65535 or min(ys) == 0 and max(ys) == 65535
+        # options re-convert the same picture without re-reading it
+        n = len(dev.realtime)
+        await link.async_set_picture_options(mode=2)
+        assert len(dev.realtime) == n + 1 and link.picture_mode == 2
+        await link.async_set_picture_options(color=6, size=50)
+        pts = _decode_points(dev.realtime[-1][2])
+        assert {c_ for *_, c_ in pts} == {6}
+        xs = [x for x, *_ in pts]
+        assert 16000 < min(xs) < 17000 and 48500 < max(xs) < 49500           # half size, centred
+        # text settings do not disturb a picture
+        n = len(dev.realtime)
+        await link.async_set_text_color(2); await link.async_set_text_size(60)
+        assert len(dev.realtime) == n and link.content == "picture"
+        # a hardware effect applies to the picture, not to the text
+        dev.model["deviceSCEChannleTotal"] = 14
+        await link.async_set_hw_effect(1)
+        eff = [(f_, a) for f_, a, _ in dev.received if f_ == 2][-2:]
+        assert eff == [(2, p.ACT_PLAY_EFFECT), (2, p.ACT_PLAY_START)] and link.content == "picture"
+        assert _decode_points(dev.realtime[-1][2]) == pts
+        # clearing removes it
+        await link.async_clear_text()
+        assert link.content is None and link.content_preview is None
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_picture_budget_follows_detail_and_device_limit():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        busy = _png(lambda d: [d.line([x, 0, 400 - x, 300], fill="black", width=2) for x in range(0, 400, 7)]
+                    + [d.ellipse([x, 20, x + 120, 140], outline="black", width=2) for x in range(0, 300, 25)])
+        await link.async_set_picture_options(mode=0, detail=10)
+        await link.async_show_picture(busy, "busy.png")
+        low = len(_decode_points(dev.realtime[-1][2]))
+        await link.async_set_picture_options(detail=100)
+        high = len(_decode_points(dev.realtime[-1][2]))
+        assert low <= 150 + 10 * 10 and 100 < high <= 661 and high > low        # sim laser accepts at most 661
+        await link.disconnect()
+    asyncio.run(go())
+
+
+def test_picture_errors_do_not_drop_the_link_and_files_load_by_name():
+    async def go():
+        dev = FakeDevice()
+        link = make_link(dev, idle_timeout=0)
+        await link.async_connect()
+        for call in (lambda: link.async_show_picture(),                                   # nothing chosen yet
+                     lambda: link.async_show_picture(b"definitely not an image", "x"),
+                     lambda: link.async_show_picture(_png(lambda d: None), "blank.png"),
+                     lambda: link.async_show_picture_file("a.png")):                      # no loader
+            try:
+                await call(); raise AssertionError("expected CubeUserError")
+            except c.CubeUserError:
+                assert link.connected and link.state["connects"] == 1 and link.content is None
+        async def loader(label):
+            assert label == "logo.png"
+            return _logo()
+        link.picture_loader = loader
+        await link.async_show_picture_file("logo.png")
+        assert link.content == "picture" and link.picture_name == "logo.png"
+        await link.disconnect()
+    asyncio.run(go())

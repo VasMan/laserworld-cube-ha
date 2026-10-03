@@ -12,6 +12,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
+from . import media
 from .client import CubeError, CubeLink
 from .const import (DOMAIN, CONF_BLE_NAME, CONF_IDLE_TIMEOUT, CONF_USER_ID,
                     DEFAULT_IDLE_TIMEOUT, DEFAULT_USER_ID)
@@ -65,6 +66,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: CubeConfigEntry) -> bool
     link.on_playlists_changed = lambda: pstore.async_delay_save(
         lambda: {"playlists": link.playlists, "active": link.playlist_name,
                  "seconds": link.playlist_seconds, "repeat": link.playlist_repeat}, 3)
+
+    # pictures: the select lists image files from your media folder; they are read on demand
+    link.picture_loader = media.make_picture_loader(hass, link)
+    link.refresh_pictures = media.make_picture_refresher(hass, link)
+    entry.async_create_background_task(hass, link.refresh_pictures(), f"{ble_name} picture scan")
 
     async def _initial_read() -> None:
         try:

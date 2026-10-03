@@ -52,6 +52,10 @@ SELECTS = (
               lambda l, v: l.async_set_text_direction(v), None, "mdi:swap-horizontal"),
     SelectDef("effect", p.EFFECTS, lambda l: l.effect,
               lambda l, v: l.async_set_effect(v), None, "mdi:animation-play"),
+    SelectDef("picture_mode", p.PICTURE_MODES, lambda l: l.picture_mode,
+              lambda l, v: l.async_set_picture_options(mode=v), None, "mdi:vector-polyline"),
+    SelectDef("picture_color", p.PICTURE_COLORS, lambda l: l.picture_color,
+              lambda l, v: l.async_set_picture_options(color=v), None, "mdi:palette-swatch-variant"),
     SelectDef("hw_effect", p.HW_EFFECTS, lambda l: l.hw_effect,
               lambda l, v: l.async_set_hw_effect(v), None, "mdi:auto-fix"),
     SelectDef("hw_layout", p.HW_LAYOUTS, lambda l: l.hw_layout,
@@ -73,6 +77,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         CubeLibrarySelect(link, entry),
         *(CubeSettingSelect(link, entry, d) for d in SETTING_SELECTS),
         CubePlaylistSelect(link, entry),
+        CubePictureSelect(link, entry),
     ])
     platform = entity_platform.async_get_current_platform()
     secs = vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3600))
@@ -231,3 +236,23 @@ class CubePlaylistSelect(CubeEntity, SelectEntity):
 
     async def async_service_move(self, index, to, playlist=None):
         await self.call(self.link.async_playlist_move(index, to, playlist))
+
+
+class CubePictureSelect(CubeEntity, SelectEntity):
+    """Pictures found in your media folder (and ``www``); choosing one shows it on the laser."""
+    _attr_translation_key = "picture"
+    _attr_icon = "mdi:image-outline"
+
+    def __init__(self, link: CubeLink, entry) -> None:
+        super().__init__(link, entry, "picture")
+
+    @property
+    def options(self) -> list[str]:
+        return list(self.link.picture_files)
+
+    @property
+    def current_option(self) -> str | None:
+        return self.link.picture_name if self.link.picture_name in self.link.picture_files else None
+
+    async def async_select_option(self, option: str) -> None:
+        await self.call(self.link.async_show_picture_file(option))
